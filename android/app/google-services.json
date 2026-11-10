@@ -1,0 +1,55 @@
+{
+  "project_info": {
+    "project_number": "400034948021",
+    "project_id": "helpi-95e83",
+    "storage_bucket": "helpi-95e83.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:400034948021:android:6030e0bf78e306fb226ffc",
+        "android_client_info": {
+          "package_name": "com.proyecto.helpi"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "400034948021-0ahid050kd2np17l55lvtvrm0gk4q6ds.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.proyecto.helpi",
+            "certificate_hash": "d9d6de8bfff26f18b9b97910958d235d3e675299"
+          }
+        },
+        {
+          "client_id": "400034948021-jbj3o2b3u6p6cob7sotpneu9in0u98bs.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.proyecto.helpi",
+            "certificate_hash": "4edfe2f0a31d899a25bd3ab2e1c0acc2181c2f55"
+          }
+        },
+        {
+          "client_id": "400034948021-3rc82p0fle2jd2r3i95e451rcit6t615.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyARi8zhu71K4MwbuTGaweEXhRDgRf_Diz0"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "400034948021-3rc82p0fle2jd2r3i95e451rcit6t615.apps.googleusercontent.com",
+              "client_type": 3
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
