@@ -1,0 +1,6 @@
+node_modules/
+.env
+*-adminsdk-*.json
+credenciales*.json
+.env
+credenciales/
