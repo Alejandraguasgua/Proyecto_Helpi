@@ -2,9 +2,7 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 
 import '../../../nucleo/tema/colores_app.dart';
-import '../../inicio/presentacion/pantalla_inicio.dart';
-import '../../registro/datos/repositorio_perfil.dart';
-import '../../registro/presentacion/pantalla_roles.dart';
+import '../../administrador/presentacion/destino_sesion.dart';
 import 'pantalla_bienvenida.dart';
 
 class PantallaLogo extends StatefulWidget {
@@ -42,11 +40,7 @@ class _EstadoPantallaLogo extends State<PantallaLogo> {
       if (usuario == null) {
         destino = const PantallaBienvenida();
       } else {
-        final perfil = await RepositorioPerfil().leer();
-
-        destino = perfil == null
-            ? const PantallaRoles()
-            : PantallaInicio(perfil: perfil);
+        destino = await destinoTrasSesion();
       }
 
       if (!mounted) return;

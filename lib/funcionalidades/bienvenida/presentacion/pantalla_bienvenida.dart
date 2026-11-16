@@ -6,9 +6,7 @@ import 'package:google_sign_in/google_sign_in.dart';
 
 import '../../../nucleo/componentes/componentes_helpi.dart';
 import '../../../nucleo/tema/colores_app.dart';
-import '../../inicio/presentacion/pantalla_inicio.dart';
-import '../../registro/datos/repositorio_perfil.dart';
-import '../../registro/presentacion/pantalla_roles.dart';
+import '../../administrador/presentacion/destino_sesion.dart';
 
 class PantallaBienvenida extends StatelessWidget {
   const PantallaBienvenida({super.key});
@@ -234,18 +232,13 @@ class _EstadoPanelAcceso extends State<_PanelAcceso> {
         return;
       }
 
-      // Recupera el perfil de esta cuenta desde Firestore.
-      final perfil = await RepositorioPerfil().leer();
+      // Administrador, cuenta suspendida, registro pendiente o inicio.
+      final destino = await destinoTrasSesion();
 
       if (!mounted) return;
 
-      // Solo muestra el registro si aún no hay un perfil completo.
       Navigator.of(context).pushReplacement(
-        MaterialPageRoute<void>(
-          builder: (_) => perfil == null
-              ? const PantallaRoles()
-              : PantallaInicio(perfil: perfil),
-        ),
+        MaterialPageRoute<void>(builder: (_) => destino),
       );
     } on GoogleSignInException catch (error) {
       if (!mounted) return;
