@@ -7,6 +7,7 @@ import 'package:google_sign_in/google_sign_in.dart';
 import '../../../nucleo/componentes/componentes_helpi.dart';
 import '../../../nucleo/tema/colores_app.dart';
 import '../../administrador/presentacion/destino_sesion.dart';
+import '../../terminos/presentacion/pantalla_terminos.dart';
 
 class PantallaBienvenida extends StatelessWidget {
   const PantallaBienvenida({super.key});
@@ -96,10 +97,7 @@ class _DistribucionEscritorio extends StatelessWidget {
         Expanded(
           flex: 5,
           child: TarjetaHelpi(
-            child: Padding(
-              padding: EdgeInsets.all(12),
-              child: _PanelAcceso(),
-            ),
+            child: Padding(padding: EdgeInsets.all(12), child: _PanelAcceso()),
           ),
         ),
       ],
@@ -163,10 +161,7 @@ class _EstadoPanelAcceso extends State<_PanelAcceso> {
     if (_procesando) return;
 
     if (Firebase.apps.isEmpty) {
-      aviso(
-        context,
-        'Falta inicializar Firebase en main.dart.',
-      );
+      aviso(context, 'Falta inicializar Firebase en main.dart.');
       return;
     }
 
@@ -179,9 +174,7 @@ class _EstadoPanelAcceso extends State<_PanelAcceso> {
       if (kIsWeb) {
         final proveedor = GoogleAuthProvider();
 
-        proveedor.setCustomParameters({
-          'prompt': 'select_account',
-        });
+        proveedor.setCustomParameters({'prompt': 'select_account'});
 
         resultado = await autenticacion.signInWithPopup(proveedor);
       } else {
@@ -216,13 +209,9 @@ class _EstadoPanelAcceso extends State<_PanelAcceso> {
           return;
         }
 
-        final credencial = GoogleAuthProvider.credential(
-          idToken: idToken,
-        );
+        final credencial = GoogleAuthProvider.credential(idToken: idToken);
 
-        resultado = await autenticacion.signInWithCredential(
-          credencial,
-        );
+        resultado = await autenticacion.signInWithCredential(credencial);
       }
 
       if (!mounted) return;
@@ -232,24 +221,20 @@ class _EstadoPanelAcceso extends State<_PanelAcceso> {
         return;
       }
 
-      // Administrador, cuenta suspendida, registro pendiente o inicio.
-      final destino = await destinoTrasSesion();
+      // Administrador, cuenta suspendida, registro pendiente, términos o inicio.
+      final destino = await destinoTrasSesion(usuario: resultado.user);
 
       if (!mounted) return;
 
-      Navigator.of(context).pushReplacement(
-        MaterialPageRoute<void>(builder: (_) => destino),
-      );
+      Navigator.of(context)
+          .pushReplacement(MaterialPageRoute<void>(builder: (_) => destino));
     } on GoogleSignInException catch (error) {
       if (!mounted) return;
 
       if (error.code == GoogleSignInExceptionCode.canceled) {
         aviso(context, 'Se canceló el inicio de sesión.');
       } else {
-        aviso(
-          context,
-          'No se pudo acceder con Google: ${error.code.name}.',
-        );
+        aviso(context, 'No se pudo acceder con Google: ${error.code.name}.');
       }
     } on FirebaseAuthException catch (error) {
       if (!mounted) return;
@@ -363,31 +348,21 @@ class _EstadoPanelAcceso extends State<_PanelAcceso> {
             backgroundColor: ColoresApp.blanco,
             foregroundColor: ColoresApp.azulMarino,
             minimumSize: const Size.fromHeight(56),
-            padding: const EdgeInsets.symmetric(
-              horizontal: 20,
-              vertical: 16,
-            ),
-            side: const BorderSide(
-              color: Color(0xFFDCE5ED),
-            ),
+            padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
+            side: const BorderSide(color: Color(0xFFDCE5ED)),
             shape: const StadiumBorder(),
           ),
           icon: _procesando
               ? const SizedBox(
                   width: 20,
                   height: 20,
-                  child: CircularProgressIndicator(
-                    strokeWidth: 2,
-                  ),
+                  child: CircularProgressIndicator(strokeWidth: 2),
                 )
               : const Icon(Icons.login_rounded),
           label: Text(
             _procesando ? 'Conectando…' : 'Continuar con Google',
             textAlign: TextAlign.center,
-            style: const TextStyle(
-              fontSize: 16,
-              fontWeight: FontWeight.w600,
-            ),
+            style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
           ),
         ),
         const SizedBox(height: 20),
@@ -416,32 +391,63 @@ class _EstadoPanelAcceso extends State<_PanelAcceso> {
         const SizedBox(height: 20),
         Wrap(
           alignment: WrapAlignment.center,
+          crossAxisAlignment: WrapCrossAlignment.center,
+          spacing: 4,
+          runSpacing: 4,
           children: [
             TextButton(
+              style: TextButton.styleFrom(
+                foregroundColor: ColoresApp.grisOscuro,
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                minimumSize: Size.zero,
+                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+              ),
               onPressed: () {
-                informacion(
-                  context,
-                  'Términos de servicio',
-                  'Los términos definitivos se prepararán '
-                      'antes del lanzamiento.',
+                Navigator.of(context).push(
+                  MaterialPageRoute<void>(
+                    builder: (_) => const PantallaTerminos(
+                      modo: ModoTerminos.consulta,
+                      pestanaInicial: 0,
+                    ),
+                  ),
                 );
               },
-              child: const Text('Términos'),
+              child: const Text(
+                'Términos y condiciones',
+                style: TextStyle(
+                  fontSize: 12,
+                  decoration: TextDecoration.underline,
+                ),
+              ),
+            ),
+            const Text(
+              '·',
+              style: TextStyle(fontSize: 12, color: ColoresApp.grisOscuro),
             ),
             TextButton(
+              style: TextButton.styleFrom(
+                foregroundColor: ColoresApp.grisOscuro,
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                minimumSize: Size.zero,
+                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+              ),
               onPressed: () {
-                informacion(
-                  context,
-                  'Privacidad',
-                  'Google y Firebase procesan el acceso a tu cuenta. '
-                      'Los datos que completes en tu perfil se '
-                      'guardarán en Cloud Firestore. '
-                      'La fotografía personalizada aún no se '
-                      'sincroniza con la nube. '
-                      'La política definitiva está pendiente.',
+                Navigator.of(context).push(
+                  MaterialPageRoute<void>(
+                    builder: (_) => const PantallaTerminos(
+                      modo: ModoTerminos.consulta,
+                      pestanaInicial: 1,
+                    ),
+                  ),
                 );
               },
-              child: const Text('Privacidad'),
+              child: const Text(
+                'Política de privacidad',
+                style: TextStyle(
+                  fontSize: 12,
+                  decoration: TextDecoration.underline,
+                ),
+              ),
             ),
           ],
         ),

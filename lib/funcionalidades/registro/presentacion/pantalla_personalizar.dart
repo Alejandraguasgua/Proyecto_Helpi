@@ -5,27 +5,69 @@ import 'package:image_picker/image_picker.dart';
 
 import '../../../nucleo/componentes/componentes_helpi.dart';
 import '../../../nucleo/tema/colores_app.dart';
+import '../../terminos/datos/contenido_terminos.dart';
+import '../../terminos/presentacion/pantalla_terminos.dart';
+import '../datos/repositorio_perfil.dart';
+import 'pantalla_registro_completado.dart';
 
 class PantallaPersonalizar extends StatefulWidget {
-  const PantallaPersonalizar({super.key, required this.datos});
+  const PantallaPersonalizar({
+    super.key,
+    required this.datos,
+    this.borradorInicial,
+    this.alCambiarBorrador,
+  });
 
   final Map<String, dynamic> datos;
+  final Map<String, dynamic>? borradorInicial;
+  final ValueChanged<Map<String, dynamic>>? alCambiarBorrador;
 
   @override
   State<PantallaPersonalizar> createState() => _EstadoPantallaPersonalizar();
 }
 
 class _EstadoPantallaPersonalizar extends State<PantallaPersonalizar> {
+  final _repositorioPerfil = RepositorioPerfil();
   final _presentacion = TextEditingController();
   final _disponibilidad = TextEditingController();
 
   Uint8List? _foto;
   bool _cargandoFoto = false;
+  bool _aceptoTerminos = false;
+  bool _guardandoRegistro = false;
+  String? _errorRegistro;
 
   bool get _esPrestador => widget.datos['rol'] == 'prestador';
 
   @override
+  void initState() {
+    super.initState();
+    final borrador = widget.borradorInicial;
+    if (borrador != null) {
+      _presentacion.text = (borrador['presentacion'] ?? '').toString();
+      _disponibilidad.text = (borrador['disponibilidad'] ?? '').toString();
+      if (borrador['foto'] is Uint8List) {
+        _foto = borrador['foto'] as Uint8List;
+      }
+      _aceptoTerminos = borrador['aceptoTerminos'] == true;
+    }
+    _presentacion.addListener(_notificarBorrador);
+    _disponibilidad.addListener(_notificarBorrador);
+  }
+
+  void _notificarBorrador() {
+    widget.alCambiarBorrador?.call({
+      'presentacion': _presentacion.text,
+      'disponibilidad': _disponibilidad.text,
+      'foto': _foto,
+      'aceptoTerminos': _aceptoTerminos,
+    });
+  }
+
+  @override
   void dispose() {
+    _presentacion.removeListener(_notificarBorrador);
+    _disponibilidad.removeListener(_notificarBorrador);
     _presentacion.dispose();
     _disponibilidad.dispose();
     super.dispose();
@@ -64,6 +106,7 @@ class _EstadoPantallaPersonalizar extends State<PantallaPersonalizar> {
       setState(() {
         _foto = contenido;
       });
+      _notificarBorrador();
     } catch (_) {
       if (mounted) {
         aviso(
@@ -80,13 +123,211 @@ class _EstadoPantallaPersonalizar extends State<PantallaPersonalizar> {
     }
   }
 
-  void _terminar({bool omitir = false}) {
-    Navigator.of(context).pop<Map<String, dynamic>>({
+  void _abrirDocumentoLegal(int pestanaInicial) {
+    FocusScope.of(context).unfocus();
+    Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => PantallaTerminos(
+          modo: ModoTerminos.consulta,
+          pestanaInicial: pestanaInicial,
+        ),
+      ),
+    );
+  }
+
+  Future<void> _terminar({bool omitir = false}) async {
+    if (_cargandoFoto || _guardandoRegistro) return;
+
+    if (!_aceptoTerminos) {
+      aviso(
+        context,
+        'Debes marcar la casilla de aceptación de Términos y condiciones y Política de privacidad para completar el registro.',
+      );
+      return;
+    }
+
+    FocusScope.of(context).unfocus();
+
+    setState(() {
+      _guardandoRegistro = true;
+      _errorRegistro = null;
+    });
+
+    final datosCompletos = <String, dynamic>{
       ...widget.datos,
       'presentacion': omitir ? '' : _presentacion.text.trim(),
       'disponibilidad': omitir ? '' : _disponibilidad.text.trim(),
       'foto': omitir ? null : _foto,
-    });
+    };
+
+    try {
+      // 1. Guarda los datos del perfil en usuarios/{uid}
+      await _repositorioPerfil.guardar(datosCompletos);
+
+      // 2. Registra la aceptación de términos asociada al UID autenticado en servidor y Firestore
+      final aceptacion = await _repositorioPerfil.registrarAceptacionTerminos(
+        versionTerminos: versionTerminosVigente,
+        versionPrivacidad: versionPrivacidadVigente,
+      );
+
+      // 3. Relee el perfil desde Firestore para asegurar consistencia total
+      final perfilLeido = await _repositorioPerfil.leer();
+
+      final perfilFinal = <String, dynamic>{
+        ...datosCompletos,
+        ...?perfilLeido,
+        'terminosAceptados': perfilLeido?['terminosAceptados'] ?? aceptacion,
+        if (!omitir && _foto != null) 'foto': _foto,
+      };
+
+      if (!mounted) return;
+
+      Navigator.of(context).pushAndRemoveUntil(
+        MaterialPageRoute<void>(
+          builder: (_) => PantallaRegistroCompletado(perfil: perfilFinal),
+        ),
+        (_) => false,
+      );
+    } catch (error) {
+      if (!mounted) return;
+
+      final mensaje = error.toString().replaceFirst('Exception: ', '');
+      setState(() {
+        _errorRegistro = mensaje.isNotEmpty ? mensaje : 'No pudimos completar tu registro. Revisa tu conexión e inténtalo nuevamente.';
+      });
+      aviso(context, _errorRegistro!);
+    } finally {
+      if (mounted) {
+        setState(() {
+          _guardandoRegistro = false;
+        });
+      }
+    }
+  }
+
+  Widget _panelConsentimientoTerminos() {
+    return TarjetaHelpi(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Checkbox(
+                value: _aceptoTerminos,
+                activeColor: ColoresApp.verdeAzulado,
+                onChanged: _guardandoRegistro
+                    ? null
+                    : (valor) {
+                        setState(() {
+                          _aceptoTerminos = valor ?? false;
+                          _errorRegistro = null;
+                        });
+                        _notificarBorrador();
+                      },
+              ),
+              Expanded(
+                child: GestureDetector(
+                  onTap: _guardandoRegistro
+                      ? null
+                      : () {
+                          setState(() {
+                            _aceptoTerminos = !_aceptoTerminos;
+                            _errorRegistro = null;
+                          });
+                          _notificarBorrador();
+                        },
+                  child: const Padding(
+                    padding: EdgeInsets.only(top: 10),
+                    child: Text(
+                      'He leído y acepto los Términos y condiciones y la Política de privacidad de HELPI.',
+                      style: TextStyle(
+                        fontSize: 13,
+                        fontWeight: FontWeight.w700,
+                        color: ColoresApp.azulMarino,
+                        height: 1.35,
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          Padding(
+            padding: const EdgeInsets.only(left: 12),
+            child: Wrap(
+              spacing: 12,
+              runSpacing: 6,
+              children: [
+                TextButton.icon(
+                  style: TextButton.styleFrom(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 8,
+                      vertical: 4,
+                    ),
+                    minimumSize: Size.zero,
+                    tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                  ),
+                  onPressed: () => _abrirDocumentoLegal(0),
+                  icon: const Icon(Icons.description_outlined, size: 16),
+                  label: const Text(
+                    'Leer Términos y condiciones (v1.0)',
+                    style: TextStyle(
+                      fontSize: 12,
+                      decoration: TextDecoration.underline,
+                    ),
+                  ),
+                ),
+                TextButton.icon(
+                  style: TextButton.styleFrom(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 8,
+                      vertical: 4,
+                    ),
+                    minimumSize: Size.zero,
+                    tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                  ),
+                  onPressed: () => _abrirDocumentoLegal(1),
+                  icon: const Icon(Icons.privacy_tip_outlined, size: 16),
+                  label: const Text(
+                    'Leer Política de privacidad (v1.0)',
+                    style: TextStyle(
+                      fontSize: 12,
+                      decoration: TextDecoration.underline,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          if (!_aceptoTerminos) ...[
+            const SizedBox(height: 8),
+            const Padding(
+              padding: EdgeInsets.only(left: 12),
+              child: Text(
+                'Marca la casilla para habilitar la finalización de tu registro.',
+                style: TextStyle(fontSize: 11, color: ColoresApp.grisOscuro),
+              ),
+            ),
+          ],
+          if (_errorRegistro != null) ...[
+            const SizedBox(height: 10),
+            Container(
+              padding: const EdgeInsets.all(10),
+              decoration: BoxDecoration(
+                color: const Color(0xFFFCE8E6),
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Text(
+                _errorRegistro!,
+                style: const TextStyle(fontSize: 12, color: ColoresApp.coral),
+              ),
+            ),
+          ],
+        ],
+      ),
+    );
   }
 
   @override
@@ -159,12 +400,13 @@ class _EstadoPantallaPersonalizar extends State<PantallaPersonalizar> {
 
                           if (_foto != null)
                             TextButton(
-                              onPressed: _cargandoFoto
+                              onPressed: (_cargandoFoto || _guardandoRegistro)
                                   ? null
                                   : () {
                                       setState(() {
                                         _foto = null;
                                       });
+                                      _notificarBorrador();
                                     },
                               child: const Text('Quitar foto'),
                             ),
@@ -216,15 +458,31 @@ class _EstadoPantallaPersonalizar extends State<PantallaPersonalizar> {
                       ),
                     ],
 
-                    const SizedBox(height: 28),
+                    const SizedBox(height: 24),
+
+                    _panelConsentimientoTerminos(),
+
+                    const SizedBox(height: 24),
 
                     FilledButton(
-                      onPressed: _cargandoFoto ? null : () => _terminar(),
-                      child: const Text('Completar mi perfil'),
+                      onPressed:
+                          (_cargandoFoto ||
+                              _guardandoRegistro ||
+                              !_aceptoTerminos)
+                          ? null
+                          : () => _terminar(),
+                      child: Text(
+                        _guardandoRegistro
+                            ? 'Completando registro…'
+                            : 'Completar mi perfil',
+                      ),
                     ),
 
                     TextButton(
-                      onPressed: _cargandoFoto
+                      onPressed:
+                          (_cargandoFoto ||
+                              _guardandoRegistro ||
+                              !_aceptoTerminos)
                           ? null
                           : () => _terminar(omitir: true),
                       child: const Text('Hacerlo después'),

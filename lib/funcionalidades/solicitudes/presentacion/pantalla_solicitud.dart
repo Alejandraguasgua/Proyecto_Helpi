@@ -1,11 +1,25 @@
+import 'dart:math';
+
 import 'package:flutter/material.dart';
 
 import '../../../nucleo/componentes/componentes_helpi.dart';
+import '../../../nucleo/tema/colores_app.dart';
 import '../../inicio/presentacion/pantalla_elegir_ubicacion.dart';
 import '../datos/repositorio_solicitudes.dart';
 
+enum ModoFormularioSolicitud { crear, editar, duplicar }
+
 class PantallaSolicitud extends StatefulWidget {
-  const PantallaSolicitud({super.key});
+  const PantallaSolicitud({
+    super.key,
+    this.modo = ModoFormularioSolicitud.crear,
+    this.solicitudInicial,
+    this.categoriaInicial,
+  });
+
+  final ModoFormularioSolicitud modo;
+  final Map<String, dynamic>? solicitudInicial;
+  final String? categoriaInicial;
 
   @override
   State<PantallaSolicitud> createState() => _EstadoPantallaSolicitud();
@@ -37,7 +51,160 @@ class _EstadoPantallaSolicitud extends State<PantallaSolicitud> {
   double? _longitud;
   DateTime? _fechaServicio;
 
+  // Valores iniciales para detectar cambios sin guardar
+  String _tituloInicial = '';
+  String _descripcionInicial = '';
+  String _categoriaInicial = 'Soporte técnico';
+  String _horarioInicial = '';
+  String _montoInicial = '';
+  String _ciudadInicial = '';
+  String _sectorInicial = '';
+  double? _latitudInicial;
+  double? _longitudInicial;
+  DateTime? _fechaInicial;
+
+  late final String _claveIdempotencia;
+  bool _fechaOriginalVencida = false;
   bool _guardando = false;
+
+  bool get _esEdicion => widget.modo == ModoFormularioSolicitud.editar;
+  bool get _esDuplicacion => widget.modo == ModoFormularioSolicitud.duplicar;
+
+  @override
+  void initState() {
+    super.initState();
+    _claveIdempotencia = _generarClaveIdempotencia();
+    _precargarDatos();
+  }
+
+  String _generarClaveIdempotencia() {
+    final random = Random();
+    final bytes = List<int>.generate(12, (_) => random.nextInt(36));
+    final sufijo = bytes.map((v) => v.toRadixString(36)).join();
+    return 'op_${DateTime.now().millisecondsSinceEpoch}_$sufijo';
+  }
+
+  void _precargarDatos() {
+    final inicial = widget.solicitudInicial;
+
+    if (inicial == null) {
+      if (widget.categoriaInicial != null &&
+          _categorias.contains(widget.categoriaInicial)) {
+        _categoria = widget.categoriaInicial!;
+        _categoriaInicial = _categoria;
+      }
+      return;
+    }
+
+    _titulo.text = (inicial['titulo'] ?? '').toString().trim();
+    _descripcion.text = (inicial['descripcion'] ?? '').toString().trim();
+    _horario.text = (inicial['horario'] ?? '').toString().trim();
+
+    final cat = (inicial['categoria'] ?? '').toString().trim();
+    if (_categorias.contains(cat)) {
+      _categoria = cat;
+    }
+
+    final centavos = inicial['montoCentavos'];
+    if (centavos is num && centavos > 0) {
+      final valorUsd = centavos / 100;
+      _monto.text = (centavos % 100 == 0)
+          ? valorUsd.toInt().toString()
+          : valorUsd.toStringAsFixed(2);
+    }
+
+    _ciudad = (inicial['ciudad'] ?? '').toString().trim();
+    _sector = (inicial['sector'] ?? '').toString().trim();
+
+    final ubicacion = inicial['ubicacion'];
+    if (ubicacion is Map) {
+      final lat = ubicacion['latitud'];
+      final lng = ubicacion['longitud'];
+      if (lat is num) _latitud = lat.toDouble();
+      if (lng is num) _longitud = lng.toDouble();
+    }
+
+    final fechaParseada = DateTime.tryParse(
+      (inicial['fechaServicio'] ?? '').toString(),
+    )?.toLocal();
+
+    if (fechaParseada != null) {
+      if (_esDuplicacion && !fechaParseada.isAfter(DateTime.now())) {
+        // En duplicación no se reutiliza automáticamente una fecha vencida
+        _fechaServicio = null;
+        _fechaOriginalVencida = true;
+      } else {
+        _fechaServicio = fechaParseada;
+      }
+    }
+
+    _tituloInicial = _titulo.text;
+    _descripcionInicial = _descripcion.text;
+    _categoriaInicial = _categoria;
+    _horarioInicial = _horario.text;
+    _montoInicial = _monto.text;
+    _ciudadInicial = _ciudad;
+    _sectorInicial = _sector;
+    _latitudInicial = _latitud;
+    _longitudInicial = _longitud;
+    _fechaInicial = _fechaServicio;
+  }
+
+  bool get _hayCambiosSinGuardar {
+    if (_esDuplicacion) {
+      // En duplicación existe un borrador abierto pendiente de publicar
+      return true;
+    }
+
+    return _titulo.text.trim() != _tituloInicial ||
+        _descripcion.text.trim() != _descripcionInicial ||
+        _categoria != _categoriaInicial ||
+        _horario.text.trim() != _horarioInicial ||
+        _monto.text.trim() != _montoInicial ||
+        _ciudad != _ciudadInicial ||
+        _sector != _sectorInicial ||
+        _latitud != _latitudInicial ||
+        _longitud != _longitudInicial ||
+        _fechaServicio?.toIso8601String() != _fechaInicial?.toIso8601String();
+  }
+
+  Future<void> _intentarSalir() async {
+    if (_guardando) return;
+
+    if (!_hayCambiosSinGuardar) {
+      Navigator.of(context).pop(false);
+      return;
+    }
+
+    final descartar = await showDialog<bool>(
+      context: context,
+      builder: (dialogo) => AlertDialog(
+        title: Text(
+          _esEdicion ? '¿Descartar cambios?' : '¿Salir sin publicar?',
+        ),
+        content: Text(
+          _esEdicion
+              ? 'Tienes modificaciones sin guardar en esta solicitud. Si sales ahora, se perderán los cambios realizados.'
+              : 'Los datos ingresados en este formulario aún no se han publicado.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogo, false),
+            child: const Text('Seguir editando'),
+          ),
+          FilledButton(
+            style: FilledButton.styleFrom(backgroundColor: ColoresApp.coral),
+            onPressed: () => Navigator.pop(dialogo, true),
+            child: const Text('Salir sin guardar'),
+          ),
+        ],
+      ),
+    );
+
+    if (descartar == true && mounted) {
+      Navigator.of(context).pop(false);
+    }
+  }
 
   String _mostrarFecha(DateTime fecha) {
     String dos(int numero) => numero.toString().padLeft(2, '0');
@@ -48,10 +215,13 @@ class _EstadoPantallaSolicitud extends State<PantallaSolicitud> {
 
   Future<void> _elegirFecha() async {
     final ahora = DateTime.now();
+    final fechaBase = (_fechaServicio != null && _fechaServicio!.isAfter(ahora))
+        ? _fechaServicio!
+        : ahora.add(const Duration(hours: 2));
 
     final fecha = await showDatePicker(
       context: context,
-      initialDate: _fechaServicio ?? ahora,
+      initialDate: fechaBase,
       firstDate: DateTime(ahora.year, ahora.month, ahora.day),
       lastDate: DateTime(ahora.year + 2, 12, 31),
     );
@@ -60,9 +230,7 @@ class _EstadoPantallaSolicitud extends State<PantallaSolicitud> {
 
     final hora = await showTimePicker(
       context: context,
-      initialTime: TimeOfDay.fromDateTime(
-        _fechaServicio ?? ahora.add(const Duration(hours: 1)),
-      ),
+      initialTime: TimeOfDay.fromDateTime(fechaBase),
     );
 
     if (hora == null || !mounted) return;
@@ -82,6 +250,7 @@ class _EstadoPantallaSolicitud extends State<PantallaSolicitud> {
 
     setState(() {
       _fechaServicio = seleccion;
+      _fechaOriginalVencida = false;
     });
   }
 
@@ -108,7 +277,6 @@ class _EstadoPantallaSolicitud extends State<PantallaSolicitud> {
   }
 
   int _montoCentavos() {
-    // La validación garantiza como máximo dos decimales.
     final texto = _monto.text.trim().replaceAll(',', '.');
     final partes = texto.split('.');
     final enteros = int.parse(partes[0]);
@@ -134,6 +302,34 @@ class _EstadoPantallaSolicitud extends State<PantallaSolicitud> {
     }
 
     return null;
+  }
+
+  Future<void> _mostrarConflictoEdicion(String mensaje) async {
+    final actualizar = await showDialog<bool>(
+      context: context,
+      builder: (dialogo) => AlertDialog(
+        title: const Text('No se pudo guardar la edición'),
+        content: Text(
+          '$mensaje\n\n'
+          'Puedes volver al detalle para actualizar el estado actual de la solicitud, '
+          'o permanecer aquí si deseas copiar lo que escribiste.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogo, false),
+            child: const Text('Permanecer aquí'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(dialogo, true),
+            child: const Text('Actualizar detalle'),
+          ),
+        ],
+      ),
+    );
+
+    if (actualizar == true && mounted) {
+      Navigator.of(context).pop(true);
+    }
   }
 
   Future<void> _guardar() async {
@@ -170,7 +366,6 @@ class _EstadoPantallaSolicitud extends State<PantallaSolicitud> {
       'ubicacion': {'latitud': _latitud, 'longitud': _longitud},
     };
 
-    // Bloquea el formulario mientras se confirma y guarda.
     setState(() {
       _guardando = true;
     });
@@ -179,7 +374,13 @@ class _EstadoPantallaSolicitud extends State<PantallaSolicitud> {
       final confirmar = await showDialog<bool>(
         context: context,
         builder: (contextoDialogo) => AlertDialog(
-          title: const Text('Revisar solicitud'),
+          title: Text(
+            _esEdicion
+                ? 'Confirmar cambios'
+                : (_esDuplicacion
+                      ? 'Publicar solicitud similar'
+                      : 'Revisar solicitud'),
+          ),
           content: SingleChildScrollView(
             child: Text(
               '${datos['titulo']}\n\n'
@@ -198,7 +399,7 @@ class _EstadoPantallaSolicitud extends State<PantallaSolicitud> {
             ),
             FilledButton(
               onPressed: () => Navigator.pop(contextoDialogo, true),
-              child: const Text('Publicar'),
+              child: Text(_esEdicion ? 'Guardar cambios' : 'Publicar'),
             ),
           ],
         ),
@@ -206,14 +407,40 @@ class _EstadoPantallaSolicitud extends State<PantallaSolicitud> {
 
       if (confirmar != true || !mounted) return;
 
-      await _repositorio.guardar(datos);
+      if (_esEdicion) {
+        final id = widget.solicitudInicial?['id']?.toString() ?? '';
+        final version = widget.solicitudInicial?['version'];
+        await _repositorio.guardar({
+          ...datos,
+          'version': version is int ? version : 1,
+        }, id: id);
+      } else if (_esDuplicacion) {
+        final idOrigen = widget.solicitudInicial?['id']?.toString() ?? '';
+        await _repositorio.duplicar(idOrigen, {
+          ...datos,
+          'claveIdempotencia': _claveIdempotencia,
+        });
+      } else {
+        await _repositorio.guardar({
+          ...datos,
+          'claveIdempotencia': _claveIdempotencia,
+        });
+      }
 
       if (!mounted) return;
 
       Navigator.of(context).pop(true);
     } catch (error) {
-      if (mounted) {
-        aviso(context, error.toString().replaceFirst('Exception: ', ''));
+      if (!mounted) return;
+      final mensaje = error.toString().replaceFirst('Exception: ', '');
+
+      if (_esEdicion &&
+          (mensaje.contains('cambió') ||
+              mensaje.contains('aceptada') ||
+              mensaje.contains('Solo puedes editar'))) {
+        await _mostrarConflictoEdicion(mensaje);
+      } else {
+        aviso(context, mensaje);
       }
     } finally {
       if (mounted) {
@@ -266,105 +493,187 @@ class _EstadoPantallaSolicitud extends State<PantallaSolicitud> {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(title: const Text('Solicitar ayuda')),
-      body: FondoHelpi(
-        child: SingleChildScrollView(
-          padding: const EdgeInsets.all(24),
-          child: Center(
-            child: ConstrainedBox(
-              constraints: const BoxConstraints(maxWidth: 600),
-              child: Form(
-                key: _formulario,
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    Text(
-                      '¿Qué ayuda necesitas?',
-                      style: Theme.of(context).textTheme.headlineMedium,
-                    ),
-                    const SizedBox(height: 24),
-                    _campo(
-                      etiqueta: 'Título',
-                      controlador: _titulo,
-                      minimo: 5,
-                      maximo: 100,
-                    ),
-                    DropdownButtonFormField<String>(
-                      initialValue: _categoria,
-                      decoration: const InputDecoration(labelText: 'Categoría'),
-                      items: _categorias.map((categoria) {
-                        return DropdownMenuItem(
-                          value: categoria,
-                          child: Text(categoria),
-                        );
-                      }).toList(),
-                      onChanged: _guardando
-                          ? null
-                          : (valor) {
-                              if (valor == null) return;
+    final tituloAppBar = _esEdicion
+        ? 'Editar solicitud'
+        : (_esDuplicacion ? 'Crear solicitud similar' : 'Solicitar ayuda');
 
-                              setState(() {
-                                _categoria = valor;
-                              });
-                            },
-                    ),
-                    const SizedBox(height: 20),
-                    _campo(
-                      etiqueta: 'Describe la ayuda que necesitas',
-                      controlador: _descripcion,
-                      minimo: 15,
-                      maximo: 1000,
-                      lineas: 4,
-                    ),
-                    OutlinedButton.icon(
-                      onPressed: _guardando ? null : _elegirFecha,
-                      icon: const Icon(Icons.calendar_month_outlined),
-                      label: Text(
-                        _fechaServicio == null
-                            ? 'Seleccionar fecha y hora'
-                            : _mostrarFecha(_fechaServicio!),
+    final subtituloFormulario = _esEdicion
+        ? 'Modifica los datos de tu solicitud publicada'
+        : (_esDuplicacion
+              ? 'Revisa los datos precargados para la nueva solicitud'
+              : '¿Qué ayuda necesitas?');
+
+    return PopScope(
+      canPop: false,
+      onPopInvokedWithResult: (didPop, _) {
+        if (!didPop) {
+          _intentarSalir();
+        }
+      },
+      child: Scaffold(
+        appBar: AppBar(
+          leading: IconButton(
+            icon: const Icon(Icons.arrow_back),
+            onPressed: _guardando ? null : _intentarSalir,
+          ),
+          title: Text(tituloAppBar),
+        ),
+        body: FondoHelpi(
+          child: SingleChildScrollView(
+            padding: const EdgeInsets.all(24),
+            child: Center(
+              child: ConstrainedBox(
+                constraints: const BoxConstraints(maxWidth: 600),
+                child: Form(
+                  key: _formulario,
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      Text(
+                        subtituloFormulario,
+                        style: Theme.of(context).textTheme.headlineMedium,
                       ),
-                    ),
-                    const SizedBox(height: 20),
-                    _campo(
-                      etiqueta: 'Horario o duración acordada',
-                      controlador: _horario,
-                      minimo: 3,
-                      maximo: 100,
-                    ),
-                    _campo(
-                      etiqueta: 'Monto ofrecido en USD',
-                      controlador: _monto,
-                      minimo: 1,
-                      maximo: 8,
-                      teclado: const TextInputType.numberWithOptions(
-                        decimal: true,
+                      if (_esDuplicacion) ...[
+                        const SizedBox(height: 12),
+                        Container(
+                          padding: const EdgeInsets.all(12),
+                          decoration: BoxDecoration(
+                            color: ColoresApp.verdeMenta,
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                          child: Row(
+                            children: [
+                              const Icon(
+                                Icons.copy_all_outlined,
+                                color: ColoresApp.verdeAzulado,
+                                size: 20,
+                              ),
+                              const SizedBox(width: 10),
+                              Expanded(
+                                child: Text(
+                                  _fechaOriginalVencida
+                                      ? 'La fecha original ya pasó. Selecciona una nueva fecha y hora futuras para publicar esta solicitud similar.'
+                                      : 'Se creará una solicitud nueva e independiente sin modificar la solicitud original.',
+                                  style: const TextStyle(
+                                    fontSize: 12,
+                                    color: ColoresApp.azulMarino,
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ],
+                      const SizedBox(height: 24),
+                      _campo(
+                        etiqueta: 'Título',
+                        controlador: _titulo,
+                        minimo: 5,
+                        maximo: 100,
                       ),
-                      validar: _validarMonto,
-                    ),
-                    OutlinedButton.icon(
-                      onPressed: _guardando ? null : _elegirUbicacion,
-                      icon: const Icon(Icons.location_on_outlined),
-                      label: Text(
-                        _ciudad.isEmpty
-                            ? 'Seleccionar ubicación'
-                            : '$_ciudad · $_sector',
+                      DropdownButtonFormField<String>(
+                        key: ValueKey(_categoria),
+                        initialValue: _categoria,
+                        decoration: const InputDecoration(
+                          labelText: 'Categoría',
+                        ),
+                        items: _categorias.map((categoria) {
+                          return DropdownMenuItem(
+                            value: categoria,
+                            child: Text(categoria),
+                          );
+                        }).toList(),
+                        onChanged: _guardando
+                            ? null
+                            : (valor) {
+                                if (valor == null) return;
+
+                                setState(() {
+                                  _categoria = valor;
+                                });
+                              },
                       ),
-                    ),
-                    const SizedBox(height: 24),
-                    FilledButton(
-                      onPressed: _guardando ? null : _guardar,
-                      child: Padding(
-                        padding: const EdgeInsets.symmetric(vertical: 12),
-                        child: Text(
-                          _guardando
-                              ? 'Procesando…'
-                              : 'Revisar y publicar solicitud',
+                      const SizedBox(height: 20),
+                      _campo(
+                        etiqueta: 'Describe la ayuda que necesitas',
+                        controlador: _descripcion,
+                        minimo: 15,
+                        maximo: 1000,
+                        lineas: 4,
+                      ),
+                      OutlinedButton.icon(
+                        onPressed: _guardando ? null : _elegirFecha,
+                        icon: const Icon(Icons.calendar_month_outlined),
+                        label: Text(
+                          _fechaServicio == null
+                              ? 'Seleccionar fecha y hora futuras'
+                              : _mostrarFecha(_fechaServicio!),
                         ),
                       ),
-                    ),
-                  ],
+                      const SizedBox(height: 20),
+                      _campo(
+                        etiqueta: 'Horario o duración acordada',
+                        controlador: _horario,
+                        minimo: 3,
+                        maximo: 100,
+                      ),
+                      _campo(
+                        etiqueta: 'Monto ofrecido en USD',
+                        controlador: _monto,
+                        minimo: 1,
+                        maximo: 8,
+                        teclado: const TextInputType.numberWithOptions(
+                          decimal: true,
+                        ),
+                        validar: _validarMonto,
+                      ),
+                      OutlinedButton.icon(
+                        onPressed: _guardando ? null : _elegirUbicacion,
+                        icon: const Icon(Icons.location_on_outlined),
+                        label: Text(
+                          _ciudad.isEmpty
+                              ? 'Seleccionar ubicación'
+                              : '$_ciudad · $_sector',
+                        ),
+                      ),
+                      const SizedBox(height: 24),
+                      FilledButton.icon(
+                        onPressed: _guardando ? null : _guardar,
+                        icon: _guardando
+                            ? const SizedBox(
+                                width: 18,
+                                height: 18,
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2,
+                                  color: Colors.white,
+                                ),
+                              )
+                            : Icon(
+                                _esEdicion
+                                    ? Icons.save_outlined
+                                    : Icons.publish_outlined,
+                              ),
+                        label: Padding(
+                          padding: const EdgeInsets.symmetric(vertical: 12),
+                          child: Text(
+                            _guardando
+                                ? 'Procesando…'
+                                : (_esEdicion
+                                      ? 'Guardar cambios'
+                                      : 'Revisar y publicar solicitud'),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(height: 10),
+                      OutlinedButton(
+                        onPressed: _guardando ? null : _intentarSalir,
+                        child: const Padding(
+                          padding: EdgeInsets.symmetric(vertical: 10),
+                          child: Text('Cancelar'),
+                        ),
+                      ),
+                    ],
+                  ),
                 ),
               ),
             ),

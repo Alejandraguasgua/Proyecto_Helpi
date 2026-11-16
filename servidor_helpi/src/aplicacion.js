@@ -9,6 +9,7 @@ const {
   exigir,
   texto,
   categorias,
+  tieneAceptacionVigente,
 } = require('./dominio');
 
 const integraciones = require('./integraciones');
@@ -65,7 +66,7 @@ function crearAplicacion({ almacen, auth, db }) {
     siguiente();
   });
 
-  // Esta ruta no necesita iniciar sesión.
+  // Estas rutas no necesitan iniciar sesión.
   aplicacion.get('/api/estado', (solicitud, respuesta) => {
     respuesta.json({
       correcto: true,
@@ -74,6 +75,15 @@ function crearAplicacion({ almacen, auth, db }) {
         'Firestore configurado; conectividad no comprobada',
     });
   });
+
+  aplicacion.get(
+    '/api/terminos/vigentes',
+    (solicitud, respuesta) => {
+      respuesta.json({
+        datos: servicio.terminosVigentes(),
+      });
+    },
+  );
 
   // Valida la sesión de Firebase antes de acceder a las rutas.
   aplicacion.use(
@@ -120,6 +130,29 @@ function crearAplicacion({ almacen, auth, db }) {
           'La cuenta está suspendida.',
           403,
         );
+
+        const rutasExentasTerminos = new Set([
+          '/terminos/vigentes',
+          '/terminos/aceptar',
+          '/perfil',
+        ]);
+
+        const rutaRelativa =
+          solicitud.path.replace(/^\/api(?=\/|$)/, '') || '/';
+
+        if (
+          !rutasExentasTerminos.has(rutaRelativa) &&
+          solicitud.usuario.admin !== true
+        ) {
+          exigir(
+            tieneAceptacionVigente(
+              perfil,
+              solicitud.usuario.uid,
+            ),
+            'Debes aceptar los Términos y condiciones vigentes para continuar.',
+            403,
+          );
+        }
 
         siguiente();
       } catch (error) {
@@ -220,10 +253,26 @@ function crearAplicacion({ almacen, auth, db }) {
     }),
   }));
 
+  registrarRuta('patch', '/perfil', async (solicitud) => ({
+    datos: await servicio.actualizarPerfil(
+      solicitud.usuario.uid,
+      solicitud.body,
+    ),
+  }));
+
+  registrarRuta('delete', '/perfil', async (solicitud) =>
+    servicio.eliminarCuenta(solicitud.usuario.uid, {
+      eliminarUsuarioAuth: async (uid) => {
+        if (auth && typeof auth.deleteUser === 'function') {
+          await auth.deleteUser(uid);
+        }
+      },
+    }),
+  );
+
   registrarRuta('get', '/perfiles/:id', async (solicitud) => {
-    const perfil = await almacen.get(
-      `usuarios/${identificador(solicitud)}`,
-    );
+    const idPerfil = identificador(solicitud);
+    const perfil = await almacen.get(`usuarios/${idPerfil}`);
 
     exigir(
       perfil && !perfil.suspendido,
@@ -231,11 +280,17 @@ function crearAplicacion({ almacen, auth, db }) {
       404,
     );
 
-    // Devuelve únicamente los datos públicos del perfil.
+    // Devuelve únicamente los datos públicos del perfil (nunca teléfono, correo ni términos).
     return {
       datos: {
+        uid: perfil.uid ?? idPerfil,
         nombre: perfil.nombre,
+        rol: perfil.rol ?? 'solicitante',
+        ciudad: perfil.ciudad ?? '',
+        sector: perfil.sector ?? '',
         presentacion: perfil.presentacion ?? '',
+        disponibilidad: perfil.disponibilidad ?? '',
+        habilidades: perfil.habilidades ?? '',
         categorias: perfil.categorias ?? [],
         fotoUrl: perfil.fotoUrl ?? '',
         promedio: perfil.promedio ?? null,
@@ -243,6 +298,17 @@ function crearAplicacion({ almacen, auth, db }) {
       },
     };
   });
+
+  registrarRuta(
+    'get',
+    '/perfiles/:id/calificaciones',
+    async (solicitud) =>
+      servicio.listarCalificacionesPerfil(
+        solicitud.usuario.uid,
+        identificador(solicitud),
+        solicitud.query,
+      ),
+  );
 
   // Estas rutas requieren configurar Cloudinary para usarlas.
   registrarRuta('post', '/perfil/foto', async (solicitud) => {
@@ -387,9 +453,7 @@ function crearAplicacion({ almacen, auth, db }) {
   );
 
   registrarRuta('get', '/notificaciones', (solicitud) =>
-    almacen.list(
-      'notificaciones',
-      'uid',
+    servicio.listarNotificaciones(
       solicitud.usuario.uid,
       solicitud.query.cursor,
     ),
@@ -398,24 +462,11 @@ function crearAplicacion({ almacen, auth, db }) {
   registrarRuta(
     'patch',
     '/notificaciones/:id',
-    async (solicitud) => {
-      const referencia = db.doc(
-        `notificaciones/${identificador(solicitud)}`,
-      );
-
-      const documento = await referencia.get();
-
-      exigir(
-        documento.exists &&
-          documento.data().uid === solicitud.usuario.uid,
-        'La notificación no existe.',
-        404,
-      );
-
-      await referencia.update({ leida: true });
-
-      return { correcto: true };
-    },
+    (solicitud) =>
+      servicio.marcarNotificacionLeida(
+        solicitud.usuario.uid,
+        identificador(solicitud),
+      ),
   );
 
   registrarRuta('post', '/dispositivos', async (solicitud) => {
@@ -671,30 +722,92 @@ function crearAplicacion({ almacen, auth, db }) {
   aplicacion.use(
     (error, solicitud, respuesta, siguiente) => {
       let estado = error.estado;
+      let mensajePersonalizado = null;
+      const textoError = String(error?.message || '');
+      const codigoGrpc = error?.code;
 
       if (estado == null) {
         if (error.type === 'entity.too.large') {
           estado = 413;
+          mensajePersonalizado =
+            'El contenido enviado supera el tamaño máximo permitido.';
         } else if (error instanceof SyntaxError) {
           estado = 400;
+          mensajePersonalizado =
+            'El formato JSON enviado al servidor no es válido.';
+        } else if (
+          codigoGrpc === 9 ||
+          /FAILED_PRECONDITION|requires an index/i.test(
+            textoError,
+          )
+        ) {
+          estado = 503;
+          mensajePersonalizado =
+            'La consulta en Firestore requiere un índice compuesto o ajuste de consulta. Pulsa Reintentar.';
+        } else if (
+          codigoGrpc === 7 ||
+          /PERMISSION_DENIED/i.test(textoError)
+        ) {
+          estado = 503;
+          mensajePersonalizado =
+            'El servidor no tiene permisos suficientes en Firestore para realizar esta operación.';
+        } else if (
+          codigoGrpc === 14 ||
+          codigoGrpc === 4 ||
+          /UNAVAILABLE|DEADLINE_EXCEEDED|ETIMEDOUT|ECONNRESET/i.test(
+            textoError,
+          )
+        ) {
+          estado = 503;
+          mensajePersonalizado =
+            'No se pudo conectar temporalmente con la base de datos Firestore. Pulsa Reintentar.';
+        } else if (
+          codigoGrpc === 16 ||
+          /UNAUTHENTICATED|invalid_grant/i.test(textoError)
+        ) {
+          estado = 503;
+          mensajePersonalizado =
+            'El servidor no pudo autenticarse con Firebase Admin / Firestore. Verifica la configuración del servidor.';
         } else {
           estado = 500;
         }
       }
 
       if (estado >= 500) {
-        console.error(
-          'Operación fallida:',
-          error.code ?? error.name,
-        );
+        // Registro diagnóstico seguro: sin tokens, contraseñas ni datos personales
+        console.error('Operación fallida en el servidor:', {
+          metodo: solicitud.method,
+          ruta: solicitud.originalUrl || solicitud.path,
+          estado,
+          codigo: error.code ?? error.name,
+          detalle: textoError.slice(0, 300),
+        });
+      }
+
+      let mensajeRespuesta =
+        mensajePersonalizado ?? error.message;
+
+      if (estado === 500 && !mensajePersonalizado) {
+        const ruta = solicitud.path || '';
+        if (ruta.includes('/solicitudes')) {
+          mensajeRespuesta =
+            'Ocurrió un error en el servidor al consultar los servicios. Pulsa Reintentar.';
+        } else if (ruta.includes('/notificaciones')) {
+          mensajeRespuesta =
+            'Ocurrió un error en el servidor al consultar las notificaciones. Pulsa Reintentar.';
+        } else if (ruta.includes('/terminos')) {
+          mensajeRespuesta =
+            'Ocurrió un error en el servidor al procesar los Términos y condiciones. Pulsa Reintentar.';
+        } else {
+          mensajeRespuesta =
+            'Ocurrió un error interno en el servidor. Pulsa Reintentar.';
+        }
       }
 
       respuesta.status(estado).json({
         correcto: false,
-        mensaje:
-          estado === 500
-            ? 'No se pudo completar la operación.'
-            : error.message,
+        codigo: error.code ?? undefined,
+        mensaje: mensajeRespuesta,
       });
     },
   );

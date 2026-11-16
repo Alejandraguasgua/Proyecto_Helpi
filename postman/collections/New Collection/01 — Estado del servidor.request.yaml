@@ -1,0 +1,35 @@
+$kind: http-request
+description: ""
+url: http://localhost:3000/api/estado
+method: GET
+scripts:
+  - type: afterResponse
+    code: "pm.test(\"El servidor responde con 200\", function () {\r
+
+      \  pm.response.to.have.status(200);\r
+
+      });\r
+
+      \r
+
+      pm.test(\"La respuesta identifica a Helpi\", function () {\r
+
+      \  const datos = pm.response.json();\r
+
+      \r
+
+      \  pm.expect(datos.correcto).to.eql(true);\r
+
+      \  pm.expect(datos.servicio).to.eql(\"API de Helpi\");\r
+
+      });\r
+
+      \r
+
+      pm.test(\"Responde en menos de 2 segundos\", function () {\r
+
+      \  pm.expect(pm.response.responseTime).to.be.below(2000);\r
+
+      });"
+    language: text/javascript
+order: 1000

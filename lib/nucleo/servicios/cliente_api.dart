@@ -2,7 +2,29 @@ import 'dart:async';
 import 'dart:convert';
 
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
+
+class ErrorApiHelpi implements Exception {
+  const ErrorApiHelpi({
+    required this.mensaje,
+    this.codigoEstado,
+    this.codigoError,
+    this.ruta,
+  });
+
+  final String mensaje;
+  final int? codigoEstado;
+  final String? codigoError;
+  final String? ruta;
+
+  bool get esFaltaAceptacionTerminos =>
+      codigoEstado == 403 &&
+      mensaje.contains('Debes aceptar los Términos y condiciones');
+
+  @override
+  String toString() => mensaje;
+}
 
 class ClienteApi {
   static const base = String.fromEnvironment(
@@ -19,13 +41,19 @@ class ClienteApi {
     final usuario = FirebaseAuth.instance.currentUser;
 
     if (usuario == null) {
-      throw Exception('Inicia sesión para continuar.');
+      throw const ErrorApiHelpi(
+        mensaje: 'Inicia sesión para continuar.',
+        codigoEstado: 401,
+      );
     }
 
     final token = await usuario.getIdToken();
 
-    if (token == null) {
-      throw Exception('No se pudo validar tu sesión. Vuelve a iniciar sesión.');
+    if (token == null || token.isEmpty) {
+      throw const ErrorApiHelpi(
+        mensaje: 'No se pudo validar tu sesión. Vuelve a iniciar sesión.',
+        codigoEstado: 401,
+      );
     }
 
     final uri = Uri.parse('$base$ruta').replace(queryParameters: consulta);
@@ -57,35 +85,64 @@ class ClienteApi {
       try {
         contenido = jsonDecode(respuesta.body);
       } on FormatException {
-        throw Exception(
-          'El servidor devolvió una respuesta inesperada '
-          '(${respuesta.statusCode}).',
+        debugPrint(
+          '[ClienteApi] Respuesta no JSON en $metodo $ruta '
+          '(HTTP ${respuesta.statusCode})',
+        );
+        throw ErrorApiHelpi(
+          mensaje:
+              'El servidor devolvió una respuesta inesperada '
+              '(HTTP ${respuesta.statusCode}). Pulsa Reintentar.',
+          codigoEstado: respuesta.statusCode,
+          ruta: ruta,
         );
       }
 
       if (contenido is! Map<String, dynamic>) {
-        throw Exception(
-          'La respuesta del servidor tiene un formato incorrecto.',
+        throw ErrorApiHelpi(
+          mensaje: 'La respuesta del servidor tiene un formato incorrecto.',
+          codigoEstado: respuesta.statusCode,
+          ruta: ruta,
         );
       }
 
       if (respuesta.statusCode < 200 || respuesta.statusCode >= 300) {
-        throw Exception(
-          contenido['mensaje']?.toString() ??
-              'No se pudo completar la operación '
-                  '(${respuesta.statusCode}).',
+        final mensajeServidor = contenido['mensaje']?.toString().trim();
+        final mensajeFinal =
+            (mensajeServidor != null && mensajeServidor.isNotEmpty)
+            ? mensajeServidor
+            : 'El servidor no pudo completar la solicitud '
+                  '(HTTP ${respuesta.statusCode}). Pulsa Reintentar.';
+
+        debugPrint(
+          '[ClienteApi] Error en $metodo $ruta -> '
+          'HTTP ${respuesta.statusCode}: $mensajeFinal',
+        );
+
+        throw ErrorApiHelpi(
+          mensaje: mensajeFinal,
+          codigoEstado: respuesta.statusCode,
+          codigoError: contenido['codigo']?.toString(),
+          ruta: ruta,
         );
       }
 
       return contenido;
     } on TimeoutException {
-      throw Exception(
-        'El servidor tardó demasiado. Revisa la conexión e inténtalo otra vez.',
+      debugPrint('[ClienteApi] Tiempo agotado en $metodo $ruta');
+      throw ErrorApiHelpi(
+        mensaje:
+            'El servidor tardó demasiado en responder. '
+            'Revisa tu conexión y pulsa Reintentar.',
+        ruta: ruta,
       );
     } on http.ClientException {
-      throw Exception(
-        'No se pudo conectar con el servidor de Helpi. '
-        'Comprueba que esté ejecutándose.',
+      debugPrint('[ClienteApi] Fallo de red al conectar con $base$ruta');
+      throw ErrorApiHelpi(
+        mensaje:
+            'No se pudo conectar con el servidor de Helpi ($base). '
+            'Comprueba que el servidor esté ejecutándose y pulsa Reintentar.',
+        ruta: ruta,
       );
     } finally {
       cliente.close();

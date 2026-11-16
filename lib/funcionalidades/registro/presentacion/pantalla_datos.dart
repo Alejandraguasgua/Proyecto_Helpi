@@ -4,8 +4,6 @@ import 'package:flutter/services.dart';
 import '../../../nucleo/componentes/componentes_helpi.dart';
 import '../../../nucleo/tema/colores_app.dart';
 import 'pantalla_personalizar.dart';
-import '../datos/repositorio_perfil.dart';
-import 'pantalla_registro_completado.dart';
 
 class PantallaDatos extends StatefulWidget {
   const PantallaDatos({super.key, required this.rol});
@@ -17,7 +15,7 @@ class PantallaDatos extends StatefulWidget {
 }
 
 class _EstadoPantallaDatos extends State<PantallaDatos> {
-  Map<String, dynamic>? _perfilPendiente;
+  Map<String, dynamic>? _borradorPaso2;
   bool _procesando = false;
 
   final _formulario = GlobalKey<FormState>();
@@ -83,35 +81,16 @@ class _EstadoPantallaDatos extends State<PantallaDatos> {
         'telefonoVerificado': false,
       };
 
-      Map<String, dynamic>? perfil;
-
-      if (_perfilPendiente != null) {
-        // Reutiliza la personalización si falló el guardado.
-        perfil = {..._perfilPendiente!, ...datos};
-      } else {
-        perfil = await Navigator.of(context).push<Map<String, dynamic>>(
-          MaterialPageRoute<Map<String, dynamic>>(
-            builder: (_) => PantallaPersonalizar(datos: datos),
-          ),
-        );
-      }
-
-      if (!mounted || perfil == null) return;
-
-      final perfilFinal = perfil;
-      _perfilPendiente = perfilFinal;
-
-      await RepositorioPerfil().guardar(perfilFinal);
-
-      if (!mounted) return;
-
-      _perfilPendiente = null;
-
-      Navigator.of(context).pushAndRemoveUntil(
+      await Navigator.of(context).push<void>(
         MaterialPageRoute<void>(
-          builder: (_) => PantallaRegistroCompletado(perfil: perfilFinal),
+          builder: (_) => PantallaPersonalizar(
+            datos: datos,
+            borradorInicial: _borradorPaso2,
+            alCambiarBorrador: (borrador) {
+              _borradorPaso2 = borrador;
+            },
+          ),
         ),
-        (_) => false,
       );
     } catch (_) {
       if (mounted) {
@@ -203,9 +182,9 @@ class _EstadoPantallaDatos extends State<PantallaDatos> {
                       Text(
                         _esPrestador
                             ? 'Cuéntanos quién eres y qué ayuda '
-                                'puedes ofrecer.'
+                                  'puedes ofrecer.'
                             : 'Completa tus datos básicos para '
-                                'participar en la comunidad.',
+                                  'participar en la comunidad.',
                       ),
                       const SizedBox(height: 26),
                       _campo(
@@ -322,7 +301,8 @@ class _EstadoPantallaDatos extends State<PantallaDatos> {
                         const SizedBox(height: 24),
                         _campo(
                           etiqueta: 'Describe tus habilidades',
-                          pista: 'Ej. Instalo programas y configuro '
+                          pista:
+                              'Ej. Instalo programas y configuro '
                               'computadoras.',
                           controlador: _habilidades,
                           icono: Icons.handyman_outlined,
@@ -353,9 +333,7 @@ class _EstadoPantallaDatos extends State<PantallaDatos> {
                       const SizedBox(height: 24),
                       FilledButton(
                         onPressed: _procesando ? null : _continuar,
-                        child: Text(
-                          _procesando ? 'Procesando…' : 'Continuar',
-                        ),
+                        child: Text(_procesando ? 'Procesando…' : 'Continuar'),
                       ),
                       const SizedBox(height: 14),
                       const Text(

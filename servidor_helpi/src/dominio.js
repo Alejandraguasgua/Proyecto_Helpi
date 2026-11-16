@@ -40,9 +40,73 @@ const categorias = [
   'Mudanzas',
 ];
 
+const estadosSolicitud = [
+  'Publicada',
+  'Aceptada',
+  'En Proceso',
+  'Completada',
+  'Cancelada',
+];
+
+function normalizarTextoBusqueda(valor) {
+  return String(valor || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
 const VERSION_TERMINOS_VIGENTE = 'v1.0';
 const VERSION_PRIVACIDAD_VIGENTE = 'v1.0';
 const FECHA_VIGENCIA_DOCUMENTOS = '2026-11-11';
+const DOCUMENTO_TERMINOS_ID = 'terminos_condiciones_helpi';
+const DOCUMENTO_PRIVACIDAD_ID = 'aviso_privacidad_helpi';
+const IDS_DOCUMENTO_TERMINOS_VALIDOS = new Set([
+  DOCUMENTO_TERMINOS_ID,
+  'terminos_y_privacidad_helpi',
+]);
+
+function tieneAceptacionVigente(perfil, uidEsperado = null) {
+  if (!perfil || typeof perfil !== 'object') {
+    return false;
+  }
+
+  const aceptacion = perfil.terminosAceptados;
+
+  if (!aceptacion || typeof aceptacion !== 'object') {
+    return false;
+  }
+
+  const uidObjetivo = uidEsperado || perfil.uid || null;
+
+  if (
+    uidObjetivo &&
+    typeof aceptacion.uid === 'string' &&
+    aceptacion.uid.trim() !== '' &&
+    aceptacion.uid !== uidObjetivo
+  ) {
+    return false;
+  }
+
+  const documentoValido =
+    aceptacion.documentoId == null ||
+    IDS_DOCUMENTO_TERMINOS_VALIDOS.has(aceptacion.documentoId);
+
+  const fechaValida =
+    (typeof aceptacion.fechaAceptacion === 'string' &&
+      aceptacion.fechaAceptacion.trim().length > 0) ||
+    typeof aceptacion.fechaAceptacion?.toDate === 'function';
+
+  return Boolean(
+    documentoValido &&
+      aceptacion.versionTerminos ===
+        VERSION_TERMINOS_VIGENTE &&
+      aceptacion.versionPrivacidad ===
+        VERSION_PRIVACIDAD_VIGENTE &&
+      fechaValida,
+  );
+}
 
 function coordenadas(valor) {
   exigir(
@@ -89,8 +153,12 @@ function validarSolicitud(datos, ahora = new Date()) {
     'Selecciona una fecha futura.',
   );
 
+  const tituloLimpio = texto(datos.titulo, 'Título', 5, 100);
+  const ciudadLimpia = texto(datos.ciudad, 'Ciudad', 2, 80);
+
   return {
-    titulo: texto(datos.titulo, 'Título', 5, 100),
+    titulo: tituloLimpio,
+    tituloNormalizado: normalizarTextoBusqueda(tituloLimpio),
 
     descripcion: texto(
       datos.descripcion,
@@ -100,7 +168,8 @@ function validarSolicitud(datos, ahora = new Date()) {
     ),
 
     categoria: datos.categoria,
-    ciudad: texto(datos.ciudad, 'Ciudad', 2, 80),
+    ciudad: ciudadLimpia,
+    ciudadNormalizada: normalizarTextoBusqueda(ciudadLimpia),
     sector: texto(datos.sector, 'Sector', 2, 100),
     horario: texto(datos.horario, 'Horario', 3, 100),
 
@@ -157,11 +226,7 @@ class ServicioHelpi {
 
     if (exigirTerminos) {
       exigir(
-        perfil.terminosAceptados &&
-          perfil.terminosAceptados.versionTerminos ===
-            VERSION_TERMINOS_VIGENTE &&
-          perfil.terminosAceptados.versionPrivacidad ===
-            VERSION_PRIVACIDAD_VIGENTE,
+        tieneAceptacionVigente(perfil, uid),
         'Debes aceptar los Términos y condiciones vigentes para continuar.',
         403,
       );
@@ -170,12 +235,158 @@ class ServicioHelpi {
     return perfil;
   }
 
+  async actualizarPerfil(uid, datos = {}) {
+    exigir(
+      datos && typeof datos === 'object',
+      'Faltan los datos del perfil.',
+      400,
+    );
+
+    const fechaServidor = this.reloj().toISOString();
+
+    return this.almacen.atomic(async (transaccion) => {
+      const usuarioExistente =
+        (await transaccion.get(`usuarios/${uid}`)) || {};
+
+      exigir(
+        !usuarioExistente.suspendido,
+        'Esta cuenta está suspendida.',
+        403,
+      );
+
+      const camposPermitidos = {};
+
+      if (datos.rol !== undefined) {
+        exigir(
+          ['solicitante', 'prestador'].includes(datos.rol),
+          'Selecciona un rol válido.',
+          400,
+        );
+        camposPermitidos.rol = datos.rol;
+      }
+
+      if (datos.nombre !== undefined) {
+        camposPermitidos.nombre = texto(
+          datos.nombre,
+          'Nombre',
+          3,
+          80,
+        );
+      }
+
+      if (datos.telefono !== undefined) {
+        const telLimpio = texto(
+          datos.telefono,
+          'Teléfono',
+          8,
+          20,
+        );
+        exigir(
+          /^\+5939[0-9]{8}$/.test(telLimpio),
+          'El teléfono debe tener formato +593 seguido de 9 dígitos que inicien en 9.',
+          400,
+        );
+        camposPermitidos.telefono = telLimpio;
+      }
+
+      if (datos.ciudad !== undefined) {
+        camposPermitidos.ciudad = texto(
+          datos.ciudad,
+          'Ciudad',
+          2,
+          80,
+        );
+      }
+
+      if (datos.sector !== undefined) {
+        camposPermitidos.sector = texto(
+          datos.sector,
+          'Sector',
+          3,
+          100,
+        );
+      }
+
+      if (datos.presentacion !== undefined) {
+        camposPermitidos.presentacion = texto(
+          String(datos.presentacion ?? ''),
+          'Presentación',
+          0,
+          300,
+        );
+      }
+
+      if (datos.disponibilidad !== undefined) {
+        camposPermitidos.disponibilidad = texto(
+          String(datos.disponibilidad ?? ''),
+          'Disponibilidad',
+          0,
+          150,
+        );
+      }
+
+      if (datos.habilidades !== undefined) {
+        camposPermitidos.habilidades = texto(
+          String(datos.habilidades ?? ''),
+          'Habilidades',
+          0,
+          500,
+        );
+      }
+
+      if (Array.isArray(datos.categorias)) {
+        camposPermitidos.categorias = datos.categorias.filter(
+          (cat) => categorias.includes(cat),
+        );
+      }
+
+      const actualizado = {
+        ...usuarioExistente,
+        ...camposPermitidos,
+        uid,
+        correo: usuarioExistente.correo ?? '',
+        perfilCompleto:
+          usuarioExistente.perfilCompleto ?? true,
+        fechaActualizacion: fechaServidor,
+      };
+
+      if (usuarioExistente.terminosAceptados) {
+        actualizado.terminosAceptados =
+          usuarioExistente.terminosAceptados;
+      }
+
+      if (usuarioExistente.historialAceptacionesTerminos) {
+        actualizado.historialAceptacionesTerminos =
+          usuarioExistente.historialAceptacionesTerminos;
+      }
+
+      if (usuarioExistente.promedio !== undefined) {
+        actualizado.promedio = usuarioExistente.promedio;
+      }
+
+      if (usuarioExistente.totalCalificaciones !== undefined) {
+        actualizado.totalCalificaciones =
+          usuarioExistente.totalCalificaciones;
+      }
+
+      if (usuarioExistente.sumaCalificaciones !== undefined) {
+        actualizado.sumaCalificaciones =
+          usuarioExistente.sumaCalificaciones;
+      }
+
+      transaccion.set(`usuarios/${uid}`, actualizado);
+
+      return actualizado;
+    });
+  }
+
   terminosVigentes() {
     return {
+      documentoId: DOCUMENTO_TERMINOS_ID,
       versionTerminos: VERSION_TERMINOS_VIGENTE,
+      avisoPrivacidadId: DOCUMENTO_PRIVACIDAD_ID,
       versionPrivacidad: VERSION_PRIVACIDAD_VIGENTE,
       fechaVigencia: FECHA_VIGENCIA_DOCUMENTOS,
-      documentoId: 'terminos_y_privacidad_helpi',
     };
   }
 
@@ -203,51 +414,148 @@ class ServicioHelpi {
     const aceptacion = {
       id: idRegistro,
       uid,
+      documentoId: DOCUMENTO_TERMINOS_ID,
       versionTerminos: datos.versionTerminos,
+      avisoPrivacidadId: DOCUMENTO_PRIVACIDAD_ID,
       versionPrivacidad: datos.versionPrivacidad,
-      documentoId: 'terminos_y_privacidad_helpi',
       fechaAceptacion: fechaServidor,
     };
 
-    // Registra en el historial inmutable de aceptaciones de Firestore
-    await this.almacen.set(
-      `aceptaciones_terminos/${idRegistro}`,
-      aceptacion,
-    );
+    return this.almacen.atomic(async (transaccion) => {
+      const usuarioExistente =
+        (await transaccion.get(`usuarios/${uid}`)) || {};
 
-    // Actualiza la aceptación vigente en el perfil del usuario
-    const usuarioExistente =
-      (await this.almacen.get(`usuarios/${uid}`)) || {};
+      exigir(
+        !usuarioExistente.suspendido,
+        'Esta cuenta está suspendida.',
+        403,
+      );
 
-    await this.almacen.set(`usuarios/${uid}`, {
-      ...usuarioExistente,
-      terminosAceptados: {
-        versionTerminos: aceptacion.versionTerminos,
-        versionPrivacidad: aceptacion.versionPrivacidad,
+      const versionDoc = await transaccion.get(
+        `documentos_legales/${DOCUMENTO_TERMINOS_ID}_${VERSION_TERMINOS_VIGENTE}`,
+      );
+
+      if (!versionDoc) {
+        transaccion.set(
+          `documentos_legales/${DOCUMENTO_TERMINOS_ID}_${VERSION_TERMINOS_VIGENTE}`,
+          {
+            documentoId: DOCUMENTO_TERMINOS_ID,
+            versionTerminos: VERSION_TERMINOS_VIGENTE,
+            avisoPrivacidadId: DOCUMENTO_PRIVACIDAD_ID,
+            versionPrivacidad: VERSION_PRIVACIDAD_VIGENTE,
+            fechaVigencia: FECHA_VIGENCIA_DOCUMENTOS,
+          },
+        );
+      }
+
+      // Registra en el historial inmutable de aceptaciones de Firestore
+      transaccion.set(
+        `aceptaciones_terminos/${idRegistro}`,
+        aceptacion,
+      );
+
+      const resumenAceptacion = {
+        id: aceptacion.id,
+        uid,
         documentoId: aceptacion.documentoId,
+        versionTerminos: aceptacion.versionTerminos,
+        avisoPrivacidadId: aceptacion.avisoPrivacidadId,
+        versionPrivacidad: aceptacion.versionPrivacidad,
         fechaAceptacion: aceptacion.fechaAceptacion,
-      },
-      fechaActualizacion: fechaServidor,
-    });
+      };
 
-    return {
-      correcto: true,
-      datos: aceptacion,
-    };
+      const historialPrevio = Array.isArray(
+        usuarioExistente.historialAceptacionesTerminos,
+      )
+        ? usuarioExistente.historialAceptacionesTerminos
+        : [];
+
+      // Actualiza la aceptación vigente y su historial en el perfil del usuario
+      transaccion.set(`usuarios/${uid}`, {
+        ...usuarioExistente,
+        uid,
+        terminosAceptados: resumenAceptacion,
+        historialAceptacionesTerminos: [
+          ...historialPrevio,
+          resumenAceptacion,
+        ],
+        fechaActualizacion: fechaServidor,
+      });
+
+      return {
+        correcto: true,
+        datos: aceptacion,
+      };
+    });
   }
 
   async crear(uid, datos) {
     await this.perfil(uid);
 
+    const campos = validarSolicitud(datos, this.reloj());
+    let claveIdempotencia = null;
+
+    if (
+      datos.claveIdempotencia != null &&
+      String(datos.claveIdempotencia).trim() !== ''
+    ) {
+      claveIdempotencia = String(datos.claveIdempotencia).trim();
+      exigir(
+        /^[A-Za-z0-9_-]{8,120}$/.test(claveIdempotencia),
+        'La clave de idempotencia no es válida.',
+        400,
+      );
+    }
+
+    const ahoraIso = this.reloj().toISOString();
+
+    if (claveIdempotencia) {
+      return this.almacen.atomic(async (transaccion) => {
+        const rutaIdemp = `idempotencia_solicitudes/${uid}_crear_${claveIdempotencia}`;
+        const previo = await transaccion.get(rutaIdemp);
+
+        if (previo && previo.solicitudId) {
+          const existente = await transaccion.get(
+            `solicitudes/${previo.solicitudId}`,
+          );
+          if (existente) {
+            return existente;
+          }
+        }
+
+        const identificador = randomUUID();
+        const solicitud = {
+          ...campos,
+          id: identificador,
+          solicitanteUid: uid,
+          prestadorUid: null,
+          estado: 'Publicada',
+          creada: ahoraIso,
+          version: 1,
+        };
+
+        transaccion.set(`solicitudes/${identificador}`, solicitud);
+        transaccion.set(rutaIdemp, {
+          uid,
+          operacion: 'crear',
+          claveIdempotencia,
+          solicitudId: identificador,
+          creada: ahoraIso,
+        });
+
+        return solicitud;
+      });
+    }
+
     const identificador = randomUUID();
 
     const solicitud = {
-      ...validarSolicitud(datos, this.reloj()),
+      ...campos,
       id: identificador,
       solicitanteUid: uid,
       prestadorUid: null,
       estado: 'Publicada',
-      creada: this.reloj().toISOString(),
+      creada: ahoraIso,
       version: 1,
     };
 
@@ -260,6 +568,8 @@ class ServicioHelpi {
   }
 
   async obtener(uid, identificador) {
+    await this.perfil(uid);
+
     const solicitud = await this.almacen.get(
       `solicitudes/${identificador}`,
     );
@@ -286,6 +596,12 @@ class ServicioHelpi {
   async listar(uid, filtros = {}) {
     await this.perfil(uid);
 
+    exigir(
+      !(filtros.mias === 'true' && filtros.aceptadas === 'true'),
+      'No puedes filtrar simultáneamente por solicitudes propias y aceptadas.',
+      400,
+    );
+
     let campo = 'estado';
     let valor = 'Publicada';
 
@@ -299,22 +615,85 @@ class ServicioHelpi {
       valor = uid;
     }
 
-    const pagina = await this.almacen.list(
-      'solicitudes',
-      campo,
-      valor,
-      filtros.cursor,
+    let estadoFiltro = null;
+    if (filtros.estado != null && String(filtros.estado).trim() !== '') {
+      estadoFiltro = String(filtros.estado).trim();
+      exigir(
+        estadosSolicitud.includes(estadoFiltro),
+        'Selecciona un estado válido.',
+        400,
+      );
+    }
+
+    let categoriaFiltro = null;
+    if (filtros.categoria != null && String(filtros.categoria).trim() !== '') {
+      categoriaFiltro = String(filtros.categoria).trim();
+      exigir(
+        categorias.includes(categoriaFiltro),
+        'Selecciona una categoría válida.',
+        400,
+      );
+    }
+
+    let ciudadFiltro = null;
+    if (filtros.ciudad != null && String(filtros.ciudad).trim() !== '') {
+      ciudadFiltro = normalizarTextoBusqueda(
+        texto(String(filtros.ciudad), 'Ciudad', 2, 80),
+      );
+    }
+
+    let prefijoTitulo = '';
+    if (filtros.busqueda != null && String(filtros.busqueda).trim() !== '') {
+      const busquedaLimpia = texto(
+        String(filtros.busqueda),
+        'Búsqueda',
+        1,
+        100,
+      );
+      prefijoTitulo = normalizarTextoBusqueda(busquedaLimpia);
+    }
+
+    const orden =
+      filtros.orden != null && String(filtros.orden).trim() !== ''
+        ? String(filtros.orden).trim()
+        : 'recientes';
+
+    exigir(
+      ['recientes', 'fecha_servicio'].includes(orden),
+      'Selecciona un criterio de ordenamiento válido.',
+      400,
     );
 
-    const ocultas = await this.almacen.list(
-      'ocultas',
-      'uid',
-      uid,
+    const limite =
+      filtros.limite != null ? Number(filtros.limite) : 20;
+
+    exigir(
+      Number.isInteger(limite) && limite >= 1 && limite <= 50,
+      'El límite de paginación debe estar entre 1 y 50.',
+      400,
     );
 
-    const identificadoresOcultos = new Set(
-      ocultas.datos.map((elemento) => elemento.solicitudId),
-    );
+    let cursorOrden = null;
+    let cursorId = null;
+
+    if (filtros.cursor != null && String(filtros.cursor).trim() !== '') {
+      const partes = String(filtros.cursor).split('|');
+      exigir(
+        partes.length === 2,
+        'El cursor de paginación no es válido.',
+        400,
+      );
+
+      [cursorOrden, cursorId] = partes;
+      const fechaCursor = new Date(cursorOrden);
+
+      exigir(
+        Number.isFinite(fechaCursor.getTime()) &&
+          /^[A-Za-z0-9_-]{1,150}$/.test(cursorId),
+        'El cursor de paginación no es válido.',
+        400,
+      );
+    }
 
     const punto =
       filtros.latitud != null
@@ -331,26 +710,76 @@ class ServicioHelpi {
       'El radio debe ser mayor de 0 y de hasta 100 km.',
     );
 
-    const datos = pagina.datos
+    const esMisServicios =
+      campo === 'solicitanteUid' || campo === 'prestadorUid';
+
+    if (
+      esMisServicios &&
+      !punto &&
+      typeof this.almacen.listSolicitudes === 'function'
+    ) {
+      return this.almacen.listSolicitudes({
+        campoPropietario: campo,
+        uid,
+        estado: estadoFiltro,
+        categoria: categoriaFiltro,
+        ciudadNormalizada: ciudadFiltro,
+        prefijoTitulo,
+        orden,
+        cursorOrden,
+        cursorId,
+        limite,
+      });
+    }
+
+    const pagina = await this.almacen.list(
+      'solicitudes',
+      campo,
+      valor,
+    );
+
+    const ocultas =
+      campo === 'estado'
+        ? await this.almacen.list('ocultas', 'uid', uid)
+        : { datos: [] };
+
+    const identificadoresOcultos = new Set(
+      ocultas.datos.map((elemento) => elemento.solicitudId),
+    );
+
+    // 1. Filtrar primero por todos los criterios combinados antes de ordenar y paginar
+    const filtrados = pagina.datos
+      .filter(
+        (solicitud) =>
+          campo !== 'estado' || solicitud.solicitanteUid !== uid,
+      )
       .filter(
         (solicitud) =>
           !identificadoresOcultos.has(solicitud.id),
       )
       .filter(
         (solicitud) =>
-          !filtros.estado ||
-          solicitud.estado === filtros.estado,
+          !estadoFiltro ||
+          solicitud.estado === estadoFiltro,
       )
       .filter(
         (solicitud) =>
-          !filtros.ciudad ||
-          solicitud.ciudad.toLowerCase() ===
-            String(filtros.ciudad).toLowerCase(),
+          !ciudadFiltro ||
+          normalizarTextoBusqueda(
+            solicitud.ciudadNormalizada || solicitud.ciudad,
+          ) === ciudadFiltro,
       )
       .filter(
         (solicitud) =>
-          !filtros.categoria ||
-          solicitud.categoria === filtros.categoria,
+          !categoriaFiltro ||
+          solicitud.categoria === categoriaFiltro,
+      )
+      .filter(
+        (solicitud) =>
+          !prefijoTitulo ||
+          normalizarTextoBusqueda(
+            solicitud.tituloNormalizado || solicitud.titulo,
+          ).startsWith(prefijoTitulo),
       )
       .filter(
         (solicitud) =>
@@ -366,26 +795,90 @@ class ServicioHelpi {
       .filter(
         (solicitud) =>
           !punto || solicitud.distanciaKm <= radio,
-      )
-      .sort((primera, segunda) => {
-        if (punto) {
-          return primera.distanciaKm - segunda.distanciaKm;
-        }
+      );
 
-        return segunda.creada.localeCompare(primera.creada);
-      });
+    // 2. Ordenar de forma determinística (fecha + id)
+    filtrados.sort((primera, segunda) => {
+      if (punto && !filtros.orden) {
+        const difDistancia = primera.distanciaKm - segunda.distanciaKm;
+        if (difDistancia !== 0) return difDistancia;
+      }
+
+      if (orden === 'fecha_servicio') {
+        const cmpFecha = String(primera.fechaServicio || '').localeCompare(
+          String(segunda.fechaServicio || ''),
+        );
+        if (cmpFecha !== 0) return cmpFecha;
+        return String(primera.id || '').localeCompare(
+          String(segunda.id || ''),
+        );
+      }
+
+      const cmpCreada = String(segunda.creada || '').localeCompare(
+        String(primera.creada || ''),
+      );
+      if (cmpCreada !== 0) return cmpCreada;
+      return String(segunda.id || '').localeCompare(
+        String(primera.id || ''),
+      );
+    });
+
+    // 3. Aplicar cursor estable después de filtrar y ordenar
+    const trasCursor = cursorOrden
+      ? filtrados.filter((solicitud) => {
+          if (orden === 'fecha_servicio') {
+            return (
+              solicitud.fechaServicio > cursorOrden ||
+              (solicitud.fechaServicio === cursorOrden &&
+                solicitud.id > cursorId)
+            );
+          }
+          return (
+            solicitud.creada < cursorOrden ||
+            (solicitud.creada === cursorOrden &&
+              solicitud.id < cursorId)
+          );
+        })
+      : filtrados;
+
+    const datos = trasCursor.slice(0, limite);
+    const ultimo = datos.at(-1);
+    const campoCursor =
+      ultimo &&
+      (orden === 'fecha_servicio'
+        ? ultimo.fechaServicio
+        : ultimo.creada);
 
     return {
-      ...pagina,
       datos,
+      siguienteCursor:
+         datos.length === limite && ultimo
+          ? `${campoCursor}|${ultimo.id}`
+          : null,
     };
   }
 
   async editar(uid, identificador, datos) {
+    await this.perfil(uid);
+
+    exigir(
+      datos && typeof datos === 'object',
+      'Faltan los datos de la solicitud.',
+      400,
+    );
+
+    exigir(
+      Number.isInteger(datos.version) && datos.version >= 1,
+      'Indica la versión actual de la solicitud.',
+      400,
+    );
+
     const campos = validarSolicitud(
       datos,
       this.reloj(),
     );
+
+    const ahoraIso = this.reloj().toISOString();
 
     return this.almacen.atomic(async (transaccion) => {
       const solicitud = await transaccion.get(
@@ -406,7 +899,7 @@ class ServicioHelpi {
 
       exigir(
         solicitud.estado === 'Publicada',
-        'Solo puedes editar solicitudes publicadas.',
+        'Solo puedes editar solicitudes publicadas. Es posible que ya haya sido aceptada.',
         409,
       );
 
@@ -416,9 +909,15 @@ class ServicioHelpi {
         409,
       );
 
+      // Conserva estrictamente los campos internos controlados por el servidor
       const actualizada = {
-        ...solicitud,
+        id: solicitud.id,
+        solicitanteUid: solicitud.solicitanteUid,
+        prestadorUid: null,
+        estado: 'Publicada',
+        creada: solicitud.creada,
         ...campos,
+        actualizada: ahoraIso,
         version: solicitud.version + 1,
       };
 
@@ -456,7 +955,17 @@ class ServicioHelpi {
       const esPrestador =
         solicitud.prestadorUid === uid;
 
+      const ahoraIso = this.reloj().toISOString();
+      const nombreActor =
+        (perfil.nombre || '').trim() ||
+        (esPrestador ? 'El prestador' : 'El solicitante');
+      const tituloServicio =
+        (solicitud.titulo || '').trim() || 'Servicio';
+
       let estado;
+      let tipoAviso;
+      let tituloAviso;
+      let mensajeAviso;
 
       if (accion === 'aceptar') {
         exigir(
@@ -497,6 +1006,9 @@ class ServicioHelpi {
         );
 
         estado = 'Aceptada';
+        tipoAviso = 'solicitud_aceptada';
+        tituloAviso = 'Solicitud aceptada';
+        mensajeAviso = `${nombreActor} aceptó tu solicitud "${tituloServicio}".`;
       } else if (accion === 'iniciar') {
         exigir(
           esPrestador && solicitud.estado === 'Aceptada',
@@ -505,6 +1017,9 @@ class ServicioHelpi {
         );
 
         estado = 'En Proceso';
+        tipoAviso = 'servicio_iniciado';
+        tituloAviso = 'Servicio iniciado';
+        mensajeAviso = `${nombreActor} inició el servicio "${tituloServicio}".`;
       } else if (accion === 'finalizar') {
         exigir(
           esPrestador && solicitud.estado === 'En Proceso',
@@ -512,18 +1027,15 @@ class ServicioHelpi {
           409,
         );
 
-        const actualizada = {
-          ...solicitud,
-          finalizacionSolicitada: true,
-          version: solicitud.version + 1,
-        };
+        // Idempotencia: solicitar finalización nuevamente no incrementa versión ni genera otro aviso.
+        if (solicitud.finalizacionSolicitada === true) {
+          return solicitud;
+        }
 
-        transaccion.set(
-          `solicitudes/${identificador}`,
-          actualizada,
-        );
-
-        return actualizada;
+        estado = 'En Proceso';
+        tipoAviso = 'finalizacion_solicitada';
+        tituloAviso = 'Confirmación de finalización pendiente';
+        mensajeAviso = `${nombreActor} solicitó confirmar la finalización de "${tituloServicio}".`;
       } else if (accion === 'confirmar') {
         exigir(
           esSolicitante &&
@@ -534,6 +1046,9 @@ class ServicioHelpi {
         );
 
         estado = 'Completada';
+        tipoAviso = 'servicio_completado';
+        tituloAviso = 'Servicio completado';
+        mensajeAviso = `${nombreActor} confirmó la finalización de "${tituloServicio}".`;
       } else if (accion === 'cancelar') {
         exigir(
           (esSolicitante || esPrestador) &&
@@ -560,6 +1075,9 @@ class ServicioHelpi {
         );
 
         estado = 'Cancelada';
+        tipoAviso = 'servicio_cancelado';
+        tituloAviso = 'Servicio cancelado';
+        mensajeAviso = `${nombreActor} canceló el servicio "${tituloServicio}". Motivo: ${motivo}`;
       } else {
         throw new ErrorHelpi(
           400,
@@ -571,21 +1089,20 @@ class ServicioHelpi {
         ...solicitud,
         estado,
         version: solicitud.version + 1,
-        actualizada: this.reloj().toISOString(),
+        actualizada: ahoraIso,
       };
 
       if (accion === 'aceptar') {
         actualizada.prestadorUid = uid;
       }
 
+      if (accion === 'finalizar') {
+        actualizada.finalizacionSolicitada = true;
+      }
+
       if (motivo) {
         actualizada.motivoCancelacion = motivo;
       }
-
-      transaccion.set(
-        `solicitudes/${identificador}`,
-        actualizada,
-      );
 
       const destinatarios = [
         ...new Set(
@@ -599,20 +1116,40 @@ class ServicioHelpi {
         ),
       ];
 
+      // Lectura previa en la transacción para evitar duplicados ante reintentos
+      const avisosParaCrear = [];
       for (const destinatario of destinatarios) {
-        const idAviso = randomUUID();
-
-        transaccion.set(
+        const idAviso = `notif_${identificador}_${tipoAviso}_${destinatario}`;
+        const existente = await transaccion.get(
           `notificaciones/${idAviso}`,
-          {
+        );
+
+        if (!existente) {
+          avisosParaCrear.push({
             id: idAviso,
             uid: destinatario,
+            destinatarioUid: destinatario,
             solicitudId: identificador,
-            mensaje: `Servicio ${estado}`,
-            pushEstado: 'pendiente',
+            servicioTitulo: tituloServicio,
+            tipo: tipoAviso,
+            titulo: tituloAviso,
+            mensaje: mensajeAviso,
             leida: false,
-            creada: this.reloj().toISOString(),
-          },
+            fechaLectura: null,
+            creada: ahoraIso,
+          });
+        }
+      }
+
+      transaccion.set(
+        `solicitudes/${identificador}`,
+        actualizada,
+      );
+
+      for (const aviso of avisosParaCrear) {
+        transaccion.set(
+          `notificaciones/${aviso.id}`,
+          aviso,
         );
       }
 
@@ -620,38 +1157,152 @@ class ServicioHelpi {
     });
   }
 
-  async duplicar(uid, identificador, datos) {
-    const solicitud = await this.obtener(
-      uid,
-      identificador,
-    );
+  async listarNotificaciones(uid, cursor, limite = 20) {
+    await this.perfil(uid);
 
     exigir(
-      solicitud.solicitanteUid === uid,
-      'Solo puedes duplicar tus propias solicitudes.',
-      403,
+      Number.isInteger(limite) && limite >= 1 && limite <= 50,
+      'El límite de paginación no es válido.',
+      400,
     );
 
-    return this.crear(uid, {
-      ...solicitud,
-      ...datos,
+    let cursorFecha = null;
+    let cursorId = null;
+
+    if (cursor != null && String(cursor).trim() !== '') {
+      const partes = String(cursor).split('|');
+      exigir(
+        partes.length === 2,
+        'El cursor de paginación no es válido.',
+        400,
+      );
+
+      [cursorFecha, cursorId] = partes;
+      const fechaParseada = new Date(cursorFecha);
+
+      exigir(
+        Number.isFinite(fechaParseada.getTime()) &&
+          /^[A-Za-z0-9_-]{1,150}$/.test(cursorId),
+        'El cursor de paginación no es válido.',
+        400,
+      );
+    }
+
+    if (typeof this.almacen.listNotificaciones === 'function') {
+      return this.almacen.listNotificaciones(
+        uid,
+        cursorFecha ? `${cursorFecha}|${cursorId}` : undefined,
+        limite,
+      );
+    }
+
+    // Respaldo para almacenes que solo implementen list()
+    const todos = await this.almacen.list(
+      'notificaciones',
+      'uid',
+      uid,
+    );
+
+    const ordenados = [...todos.datos].sort((a, b) => {
+      const cmpFecha = String(b.creada || '').localeCompare(
+        String(a.creada || ''),
+      );
+      if (cmpFecha !== 0) return cmpFecha;
+      return String(b.id || '').localeCompare(String(a.id || ''));
+    });
+
+    const filtradosCursor = cursorFecha
+      ? ordenados.filter(
+          (item) =>
+            item.creada < cursorFecha ||
+            (item.creada === cursorFecha && item.id < cursorId),
+        )
+      : ordenados;
+
+    const datos = filtradosCursor.slice(0, limite);
+    const ultimo = datos.at(-1);
+
+    return {
+      datos,
+      siguienteCursor:
+        datos.length === limite && ultimo
+          ? `${ultimo.creada}|${ultimo.id}`
+          : null,
+    };
+  }
+
+  async marcarNotificacionLeida(uid, idNotificacion) {
+    await this.perfil(uid);
+
+    return this.almacen.atomic(async (transaccion) => {
+      const notificacion = await transaccion.get(
+        `notificaciones/${idNotificacion}`,
+      );
+
+      exigir(
+        notificacion && notificacion.uid === uid,
+        'La notificación no existe.',
+        404,
+      );
+
+      if (notificacion.leida === true && notificacion.fechaLectura) {
+        return {
+          correcto: true,
+          datos: notificacion,
+        };
+      }
+
+      const actualizada = {
+        ...notificacion,
+        leida: true,
+        fechaLectura:
+          notificacion.fechaLectura ||
+          this.reloj().toISOString(),
+      };
+
+      transaccion.set(
+        `notificaciones/${idNotificacion}`,
+        actualizada,
+      );
+
+      return {
+        correcto: true,
+        datos: actualizada,
+      };
     });
   }
 
-  async calificar(uid, identificador, datos) {
+  async duplicar(uid, identificador, datos = {}) {
+    await this.perfil(uid);
+
     exigir(
-      Number.isInteger(datos.estrellas) &&
-        datos.estrellas >= 1 &&
-        datos.estrellas <= 5,
-      'Selecciona entre 1 y 5 estrellas.',
+      datos && typeof datos === 'object',
+      'Faltan los datos para duplicar la solicitud.',
+      400,
     );
 
-    const comentario = texto(
-      datos.comentario ?? '',
-      'Comentario',
-      0,
-      500,
+    exigir(
+      typeof datos.fechaServicio === 'string' &&
+        datos.fechaServicio.trim().length > 0,
+      'Selecciona una fecha y hora futuras para la nueva solicitud.',
+      400,
     );
+
+    let claveIdempotencia = null;
+    if (
+      datos.claveIdempotencia != null &&
+      String(datos.claveIdempotencia).trim() !== ''
+    ) {
+      claveIdempotencia = String(datos.claveIdempotencia).trim();
+      exigir(
+        /^[A-Za-z0-9_-]{8,120}$/.test(claveIdempotencia),
+        'La clave de idempotencia no es válida.',
+        400,
+      );
+    }
+
+    const ahora = this.reloj();
+    const ahoraIso = ahora.toISOString();
 
     return this.almacen.atomic(async (transaccion) => {
       const solicitud = await transaccion.get(
@@ -659,53 +1310,173 @@ class ServicioHelpi {
       );
 
       exigir(
-        solicitud && solicitud.estado === 'Completada',
-        'El servicio debe estar completado.',
+        solicitud,
+        'La solicitud no existe.',
+        404,
+      );
+
+      exigir(
+        solicitud.solicitanteUid === uid,
+        'Solo puedes duplicar tus propias solicitudes.',
+        403,
+      );
+
+      if (claveIdempotencia) {
+        const rutaIdemp = `idempotencia_solicitudes/${uid}_duplicar_${identificador}_${claveIdempotencia}`;
+        const previo = await transaccion.get(rutaIdemp);
+
+        if (previo && previo.solicitudId) {
+          const existente = await transaccion.get(
+            `solicitudes/${previo.solicitudId}`,
+          );
+          if (existente) {
+            return existente;
+          }
+        }
+      }
+
+      // Toma únicamente los campos descriptivos editables, nunca campos internos
+      const borrador = {
+        titulo: datos.titulo ?? solicitud.titulo,
+        descripcion: datos.descripcion ?? solicitud.descripcion,
+        categoria: datos.categoria ?? solicitud.categoria,
+        ciudad: datos.ciudad ?? solicitud.ciudad,
+        sector: datos.sector ?? solicitud.sector,
+        horario: datos.horario ?? solicitud.horario,
+        montoCentavos: datos.montoCentavos ?? solicitud.montoCentavos,
+        ubicacion: datos.ubicacion ?? solicitud.ubicacion,
+        fechaServicio: datos.fechaServicio,
+      };
+
+      const campos = validarSolicitud(borrador, ahora);
+      const nuevoId = randomUUID();
+
+      const nuevaSolicitud = {
+        ...campos,
+        id: nuevoId,
+        solicitanteUid: uid,
+        prestadorUid: null,
+        estado: 'Publicada',
+        creada: ahoraIso,
+        version: 1,
+      };
+
+      transaccion.set(
+        `solicitudes/${nuevoId}`,
+        nuevaSolicitud,
+      );
+
+      if (claveIdempotencia) {
+        transaccion.set(
+          `idempotencia_solicitudes/${uid}_duplicar_${identificador}_${claveIdempotencia}`,
+          {
+            uid,
+            operacion: 'duplicar',
+            solicitudOrigenId: identificador,
+            claveIdempotencia,
+            solicitudId: nuevoId,
+            creada: ahoraIso,
+          },
+        );
+      }
+
+      return nuevaSolicitud;
+    });
+  }
+
+  async calificar(uid, identificador, datos = {}) {
+    const perfilAutor = await this.perfil(uid);
+
+    exigir(
+      datos && typeof datos === 'object',
+      'Faltan los datos de la calificación.',
+      400,
+    );
+
+    exigir(
+      Number.isInteger(datos.estrellas) &&
+        datos.estrellas >= 1 &&
+        datos.estrellas <= 5,
+      'Selecciona entre 1 y 5 estrellas.',
+      400,
+    );
+
+    const comentario = texto(
+      String(datos.comentario ?? ''),
+      'Comentario',
+      0,
+      500,
+    );
+
+    const ahoraIso = this.reloj().toISOString();
+
+    return this.almacen.atomic(async (transaccion) => {
+      const solicitud = await transaccion.get(
+        `solicitudes/${identificador}`,
+      );
+
+      exigir(
+        solicitud,
+        'La solicitud no existe.',
+        404,
+      );
+
+      exigir(
+        solicitud.estado === 'Completada',
+        'El servicio debe estar completado antes de poder calificarlo.',
         409,
       );
 
       exigir(
-        [
-          solicitud.solicitanteUid,
-          solicitud.prestadorUid,
-        ].includes(uid),
-        'No participaste en este servicio.',
+        solicitud.solicitanteUid === uid,
+        'Solo la persona solicitante puede calificar al prestador del servicio.',
         403,
       );
 
-      const destino =
-        uid === solicitud.solicitanteUid
-          ? solicitud.prestadorUid
-          : solicitud.solicitanteUid;
+      const destino = solicitud.prestadorUid;
 
-      const clave =
-        `calificaciones/${identificador}_${uid}`;
+      exigir(
+        typeof destino === 'string' && destino.trim().length > 0,
+        'Este servicio no tiene un prestador asignado.',
+        409,
+      );
 
+      const clave = `calificaciones/${identificador}_${uid}`;
       const anterior = await transaccion.get(clave);
+
+      exigir(
+        !anterior && !solicitud.calificadaPorSolicitante,
+        'Ya calificaste este servicio. Solo se permite una calificación por solicitud.',
+        409,
+      );
 
       const receptor = await transaccion.get(
         `usuarios/${destino}`,
       );
 
       exigir(
-        !anterior,
-        'Ya calificaste este servicio.',
-        409,
-      );
-
-      exigir(
         receptor,
-        'El perfil de la contraparte no existe.',
+        'El perfil del prestador no existe.',
         404,
       );
+
+      const nombreCompleto = String(
+        perfilAutor?.nombre || 'Solicitante',
+      ).trim();
+      const autorNombre =
+        nombreCompleto.split(/\s+/)[0] || 'Solicitante';
 
       const calificacion = {
         id: `${identificador}_${uid}`,
         solicitudId: identificador,
         autorUid: uid,
+        autorNombre,
         destinoUid: destino,
         estrellas: datos.estrellas,
         comentario,
+        tituloSolicitud: solicitud.titulo ?? '',
+        categoria: solicitud.categoria ?? '',
+        creada: ahoraIso,
       };
 
       const cantidad =
@@ -715,23 +1486,235 @@ class ServicioHelpi {
         (receptor.sumaCalificaciones ?? 0) +
         datos.estrellas;
 
-      transaccion.set(
-        clave,
-        calificacion,
-      );
+      const promedio = Number((suma / cantidad).toFixed(2));
 
-      transaccion.set(
-        `usuarios/${destino}`,
-        {
-          ...receptor,
-          totalCalificaciones: cantidad,
-          sumaCalificaciones: suma,
-          promedio: suma / cantidad,
+      transaccion.set(clave, calificacion);
+
+      transaccion.set(`solicitudes/${identificador}`, {
+        ...solicitud,
+        calificadaPorSolicitante: true,
+        calificacionSolicitante: {
+          id: calificacion.id,
+          estrellas: calificacion.estrellas,
+          comentario: calificacion.comentario,
+          creada: calificacion.creada,
         },
-      );
+      });
+
+      transaccion.set(`usuarios/${destino}`, {
+        ...receptor,
+        totalCalificaciones: cantidad,
+        sumaCalificaciones: suma,
+        promedio,
+      });
 
       return calificacion;
     });
+  }
+
+  async listarCalificacionesPerfil(
+    uidConsulta,
+    destinoUid,
+    filtros = {},
+  ) {
+    await this.perfil(uidConsulta);
+
+    const receptor = await this.almacen.get(
+      `usuarios/${destinoUid}`,
+    );
+
+    exigir(
+      receptor && !receptor.suspendido,
+      'El perfil del prestador no está disponible.',
+      404,
+    );
+
+    const limite =
+      filtros.limite != null ? Number(filtros.limite) : 10;
+
+    exigir(
+      Number.isInteger(limite) && limite >= 1 && limite <= 50,
+      'El límite de paginación debe estar entre 1 y 50.',
+      400,
+    );
+
+    let cursor = null;
+    if (
+      filtros.cursor != null &&
+      String(filtros.cursor).trim() !== ''
+    ) {
+      cursor = String(filtros.cursor).trim();
+      const partes = cursor.split('|');
+      exigir(
+        partes.length === 2 && partes[1].length > 0,
+        'El cursor de paginación no es válido.',
+        400,
+      );
+    }
+
+    let pagina;
+    if (typeof this.almacen.listCalificaciones === 'function') {
+      pagina = await this.almacen.listCalificaciones(
+        destinoUid,
+        cursor,
+        limite,
+      );
+    } else {
+      const lista = await this.almacen.list(
+        'calificaciones',
+        'destinoUid',
+        destinoUid,
+      );
+      const ordenadas = [...lista.datos].sort((a, b) => {
+        const cmpFecha = String(b.creada || '').localeCompare(
+          String(a.creada || ''),
+        );
+        if (cmpFecha !== 0) return cmpFecha;
+        return String(b.id || '').localeCompare(String(a.id || ''));
+      });
+
+      let filtradas = ordenadas;
+      if (cursor) {
+        const [cursorFecha, cursorId] = cursor.split('|');
+        filtradas = ordenadas.filter(
+          (item) =>
+            String(item.creada || '') < cursorFecha ||
+            (String(item.creada || '') === cursorFecha &&
+              String(item.id || '') < cursorId),
+        );
+      }
+
+      const recorte = filtradas.slice(0, limite);
+      const ultimo = recorte.at(-1);
+      pagina = {
+        datos: recorte,
+        siguienteCursor:
+          filtradas.length > limite &&
+          recorte.length === limite &&
+          ultimo
+            ? `${ultimo.creada || ''}|${ultimo.id}`
+            : null,
+      };
+    }
+
+    // Expone únicamente campos públicos; nunca expone teléfonos, correos ni UIDs privados
+    const resenasPublicas = pagina.datos.map((item) => ({
+      id: item.id,
+      solicitudId: item.solicitudId,
+      autorNombre: item.autorNombre || 'Solicitante',
+      estrellas: item.estrellas,
+      comentario: item.comentario ?? '',
+      tituloSolicitud: item.tituloSolicitud ?? '',
+      categoria: item.categoria ?? '',
+      creada: item.creada ?? null,
+    }));
+
+    return {
+      promedio: receptor.promedio ?? null,
+      totalCalificaciones: receptor.totalCalificaciones ?? 0,
+      datos: resenasPublicas,
+      siguienteCursor: pagina.siguienteCursor ?? null,
+    };
+  }
+
+  async eliminarCuenta(uid, { eliminarUsuarioAuth } = {}) {
+    exigir(
+      typeof uid === 'string' && uid.trim().length > 0,
+      'Inicia sesión para continuar.',
+      401,
+    );
+
+    const perfilExistente = await this.almacen.get(
+      `usuarios/${uid}`,
+    );
+
+    exigir(
+      perfilExistente,
+      'La cuenta ya no tiene un perfil activo.',
+      404,
+    );
+
+    const estadosActivos = new Set([
+      'Publicada',
+      'Aceptada',
+      'En Proceso',
+    ]);
+
+    const [comoSolicitante, comoPrestador] = await Promise.all([
+      typeof this.almacen.listSolicitudes === 'function'
+        ? this.almacen.listSolicitudes({
+            campoPropietario: 'solicitanteUid',
+            uid,
+            limite: 200,
+          })
+        : this.almacen.list('solicitudes', 'solicitanteUid', uid),
+      typeof this.almacen.listSolicitudes === 'function'
+        ? this.almacen.listSolicitudes({
+            campoPropietario: 'prestadorUid',
+            uid,
+            limite: 200,
+          })
+        : this.almacen.list('solicitudes', 'prestadorUid', uid),
+    ]);
+
+    const activasSolicitante = comoSolicitante.datos.filter((s) =>
+      estadosActivos.has(s.estado),
+    );
+    const activasPrestador = comoPrestador.datos.filter((s) =>
+      estadosActivos.has(s.estado),
+    );
+    const totalActivas =
+      activasSolicitante.length + activasPrestador.length;
+
+    exigir(
+      totalActivas === 0,
+      `No puedes eliminar tu cuenta porque tienes ${totalActivas} servicio(s) activo(s) (en estado Publicada, Aceptada o En Proceso). Cancela tus solicitudes publicadas o finaliza los servicios en curso antes de eliminar tu cuenta.`,
+      409,
+    );
+
+    // 1. Anonimiza el nombre del autor en las reseñas emitidas por esta cuenta para conservar la integridad histórica del prestador sin exponer datos personales
+    const calificacionesEmitidas = await this.almacen.list(
+      'calificaciones',
+      'autorUid',
+      uid,
+    );
+
+    for (const cal of calificacionesEmitidas.datos) {
+      await this.almacen.set(`calificaciones/${cal.id}`, {
+        ...cal,
+        autorNombre: 'Usuario eliminado',
+      });
+    }
+
+    // 2. Elimina las notificaciones y tokens de dispositivos asociados al UID
+    const [notificacionesUsuario, dispositivosUsuario] =
+      await Promise.all([
+        this.almacen.list('notificaciones', 'uid', uid),
+        this.almacen.list('dispositivos', 'uid', uid),
+      ]);
+
+    if (typeof this.almacen.delete === 'function') {
+      for (const notif of notificacionesUsuario.datos) {
+        await this.almacen.delete(`notificaciones/${notif.id}`);
+      }
+      for (const disp of dispositivosUsuario.datos) {
+        if (disp.id) {
+          await this.almacen.delete(`dispositivos/${disp.id}`);
+        }
+      }
+      // 3. Elimina los datos personales del perfil en Firestore
+      await this.almacen.delete(`usuarios/${uid}`);
+    }
+
+    // 4. Elimina la cuenta en Firebase Authentication usando el UID del token validado
+    if (typeof eliminarUsuarioAuth === 'function') {
+      await eliminarUsuarioAuth(uid);
+    }
+
+    return {
+      correcto: true,
+      mensaje: 'Tu cuenta y tus datos personales fueron eliminados.',
+    };
   }
 }
 
@@ -742,9 +1725,14 @@ module.exports = {
   texto,
   coordenadas,
   categorias,
+  estadosSolicitud,
+  normalizarTextoBusqueda,
   validarSolicitud,
   distanciaKm,
   VERSION_TERMINOS_VIGENTE,
   VERSION_PRIVACIDAD_VIGENTE,
   FECHA_VIGENCIA_DOCUMENTOS,
+  DOCUMENTO_TERMINOS_ID,
+  DOCUMENTO_PRIVACIDAD_ID,
+  tieneAceptacionVigente,
 };

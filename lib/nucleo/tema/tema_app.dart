@@ -58,7 +58,7 @@ abstract final class TemaApp {
         style: FilledButton.styleFrom(
           backgroundColor: ColoresApp.verdeAzulado,
           foregroundColor: ColoresApp.blanco,
-          minimumSize: const Size.fromHeight(54),
+          minimumSize: const Size(64, 54),
           shape: RoundedRectangleBorder(
             borderRadius: BorderRadius.circular(16),
           ),

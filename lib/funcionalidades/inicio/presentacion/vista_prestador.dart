@@ -107,9 +107,11 @@ class _EstadoVistaPrestador extends State<VistaPrestador> {
     });
 
     try {
+      final textoBusqueda = _busqueda.text.trim();
       final pagina = await _repositorio.listar({
         'ciudad': _ciudad,
         if (_categoria != 'Todas') 'categoria': _categoria,
+        if (textoBusqueda.isNotEmpty) 'busqueda': textoBusqueda,
         if (_tienePunto) ...{
           'latitud': _latitud.toString(),
           'longitud': _longitud.toString(),
@@ -648,11 +650,24 @@ class _EstadoVistaPrestador extends State<VistaPrestador> {
         const SizedBox(height: 16),
         TextField(
           controller: _busqueda,
-          decoration: const InputDecoration(
-            hintText: 'Buscar entre las solicitudes cargadas',
-            prefixIcon: Icon(Icons.search),
+          decoration: InputDecoration(
+            labelText: 'Buscar por título',
+            hintText: 'Ej. Reparación, Tutoría…',
+            helperText: 'Búsqueda por prefijo del título (pulsa Enter o la lupa para buscar en el servidor).',
+            prefixIcon: const Icon(Icons.search),
+            suffixIcon: _busqueda.text.isNotEmpty
+                ? IconButton(
+                    tooltip: 'Limpiar búsqueda',
+                    icon: const Icon(Icons.clear),
+                    onPressed: () {
+                      setState(() => _busqueda.clear());
+                      _cargar();
+                    },
+                  )
+                : null,
           ),
           onChanged: (_) => setState(() {}),
+          onSubmitted: (_) => _cargar(),
         ),
         const SizedBox(height: 16),
         Wrap(

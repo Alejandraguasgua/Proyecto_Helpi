@@ -1,14 +1,24 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
 import '../../../nucleo/componentes/componentes_helpi.dart';
+import '../../../nucleo/servicios/cliente_api.dart';
 import '../../../nucleo/tema/colores_app.dart';
+import '../../registro/datos/repositorio_perfil.dart';
+import '../../terminos/presentacion/pantalla_terminos.dart';
 import '../datos/repositorio_solicitudes.dart';
 import 'pantalla_detalle_servicio.dart';
 
 class VistaMisServicios extends StatefulWidget {
-  const VistaMisServicios({super.key, required this.esPrestador});
+  const VistaMisServicios({
+    super.key,
+    required this.esPrestador,
+    this.alActualizarPerfil,
+  });
 
   final bool esPrestador;
+  final ValueChanged<Map<String, dynamic>>? alActualizarPerfil;
 
   @override
   State<VistaMisServicios> createState() => _EstadoVistaMisServicios();
@@ -16,7 +26,10 @@ class VistaMisServicios extends StatefulWidget {
 
 class _EstadoVistaMisServicios extends State<VistaMisServicios> {
   final _repositorio = RepositorioSolicitudes();
+  final _busqueda = TextEditingController();
   final List<Map<String, dynamic>> _servicios = [];
+
+  Timer? _temporizadorBusqueda;
 
   static const _estados = [
     'Todas',
@@ -27,12 +40,33 @@ class _EstadoVistaMisServicios extends State<VistaMisServicios> {
     'Cancelada',
   ];
 
+  static const _categorias = [
+    'Todas',
+    'Soporte técnico',
+    'Tutorías',
+    'Reparaciones',
+    'Hogar',
+    'Mascotas',
+    'Mudanzas',
+  ];
+
   late bool _modoPrestador;
   String _filtroEstado = 'Todas';
+  String _filtroCategoria = 'Todas';
+  String _orden = 'recientes';
 
+  int _versionConsulta = 0;
   bool _cargando = false;
+  bool _cargandoMas = false;
+  bool _requiereAceptarTerminos = false;
   String? _error;
   String? _cursor;
+
+  bool get _tieneFiltrosActivos =>
+      _filtroEstado != 'Todas' ||
+      _filtroCategoria != 'Todas' ||
+      _busqueda.text.trim().isNotEmpty ||
+      _orden != 'recientes';
 
   @override
   void initState() {
@@ -53,17 +87,49 @@ class _EstadoVistaMisServicios extends State<VistaMisServicios> {
     }
   }
 
-  Future<void> _cargar({bool mas = false}) async {
-    if (_cargando) return;
+  @override
+  void dispose() {
+    _temporizadorBusqueda?.cancel();
+    _versionConsulta++;
+    _busqueda.dispose();
+    super.dispose();
+  }
 
-    final modoActual = _modoPrestador;
-    final estadoActual = _filtroEstado;
+  void _alCambiarBusqueda(String _) {
+    _temporizadorBusqueda?.cancel();
+    setState(() {});
+    _temporizadorBusqueda = Timer(const Duration(milliseconds: 350), () {
+      if (mounted) {
+        _cargar();
+      }
+    });
+  }
+
+  void _limpiarFiltros() {
+    _temporizadorBusqueda?.cancel();
+    setState(() {
+      _filtroEstado = 'Todas';
+      _filtroCategoria = 'Todas';
+      _orden = 'recientes';
+      _busqueda.clear();
+    });
+    _cargar();
+  }
+
+  Future<void> _cargar({bool mas = false}) async {
+    if (mas && (_cargando || _cargandoMas || _cursor == null)) return;
+
+    final int version = mas ? _versionConsulta : ++_versionConsulta;
+    final String? cursorConsulta = mas ? _cursor : null;
+    final textoBusqueda = _busqueda.text.trim();
 
     setState(() {
-      _cargando = true;
       _error = null;
-
-      if (!mas) {
+      _requiereAceptarTerminos = false;
+      if (mas) {
+        _cargandoMas = true;
+      } else {
+        _cargando = true;
         _servicios.clear();
         _cursor = null;
       }
@@ -71,20 +137,18 @@ class _EstadoVistaMisServicios extends State<VistaMisServicios> {
 
     try {
       final filtros = <String, String>{
-        if (modoActual) 'aceptadas': 'true',
-        if (!modoActual) 'mias': 'true',
-        if (estadoActual != 'Todas') 'estado': estadoActual,
-        if (mas && _cursor != null) 'cursor': _cursor!,
+        if (_modoPrestador) 'aceptadas': 'true',
+        if (!_modoPrestador) 'mias': 'true',
+        if (_filtroEstado != 'Todas') 'estado': _filtroEstado,
+        if (_filtroCategoria != 'Todas') 'categoria': _filtroCategoria,
+        if (textoBusqueda.isNotEmpty) 'busqueda': textoBusqueda,
+        'orden': _orden,
+        if (mas && cursorConsulta != null) 'cursor': cursorConsulta,
       };
 
       final pagina = await _repositorio.listar(filtros);
 
-      if (!mounted) return;
-
-      // Descartar si el usuario cambió de modo o filtro mientras se esperaba la red
-      if (_modoPrestador != modoActual || _filtroEstado != estadoActual) {
-        return;
-      }
+      if (!mounted || version != _versionConsulta) return;
 
       setState(() {
         final ids = _servicios.map((s) => s['id']).toSet();
@@ -93,17 +157,19 @@ class _EstadoVistaMisServicios extends State<VistaMisServicios> {
 
         _cursor = pagina.cursor;
         _cargando = false;
+        _cargandoMas = false;
       });
     } catch (error) {
-      if (!mounted) return;
+      if (!mounted || version != _versionConsulta) return;
 
-      if (_modoPrestador != modoActual || _filtroEstado != estadoActual) {
-        return;
-      }
+      final faltaAceptacion =
+          error is ErrorApiHelpi && error.esFaltaAceptacionTerminos;
 
       setState(() {
+        _requiereAceptarTerminos = faltaAceptacion;
         _error = error.toString().replaceFirst('Exception: ', '');
         _cargando = false;
+        _cargandoMas = false;
       });
     }
   }
@@ -115,7 +181,8 @@ class _EstadoVistaMisServicios extends State<VistaMisServicios> {
 
     String dos(int n) => n.toString().padLeft(2, '0');
 
-    return '${dos(fecha.day)}/${dos(fecha.month)}/${fecha.year} ${dos(fecha.hour)}:${dos(fecha.minute)}';
+    return '${dos(fecha.day)}/${dos(fecha.month)}/${fecha.year} '
+        '${dos(fecha.hour)}:${dos(fecha.minute)}';
   }
 
   IconData _iconoCategoria(String? categoria) {
@@ -221,7 +288,6 @@ class _EstadoVistaMisServicios extends State<VistaMisServicios> {
                 if (_modoPrestador) {
                   setState(() {
                     _modoPrestador = false;
-                    _filtroEstado = 'Todas';
                   });
                   _cargar();
                 }
@@ -237,7 +303,6 @@ class _EstadoVistaMisServicios extends State<VistaMisServicios> {
                 if (!_modoPrestador) {
                   setState(() {
                     _modoPrestador = true;
-                    _filtroEstado = 'Todas';
                   });
                   _cargar();
                 }
@@ -262,7 +327,7 @@ class _EstadoVistaMisServicios extends State<VistaMisServicios> {
         onTap: alPresionar,
         borderRadius: BorderRadius.circular(10),
         child: Padding(
-          padding: const EdgeInsets.symmetric(vertical: 10),
+          padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 6),
           child: Text(
             titulo,
             textAlign: TextAlign.center,
@@ -273,6 +338,119 @@ class _EstadoVistaMisServicios extends State<VistaMisServicios> {
             ),
           ),
         ),
+      ),
+    );
+  }
+
+  Widget _panelFiltros() {
+    return TarjetaHelpi(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          TextField(
+            controller: _busqueda,
+            onChanged: _alCambiarBusqueda,
+            onSubmitted: (_) {
+              _temporizadorBusqueda?.cancel();
+              _cargar();
+            },
+            decoration: InputDecoration(
+              labelText: 'Buscar por título',
+              hintText: 'Ej. Reparación, Tutoría…',
+              helperText: 'Búsqueda por prefijo desde el inicio del título (sin distinguir tildes ni mayúsculas).',
+              helperMaxLines: 2,
+              prefixIcon: const Icon(Icons.search),
+              suffixIcon: _busqueda.text.isNotEmpty
+                  ? IconButton(
+                      tooltip: 'Borrar búsqueda',
+                      icon: const Icon(Icons.clear),
+                      onPressed: () {
+                        _temporizadorBusqueda?.cancel();
+                        setState(() => _busqueda.clear());
+                        _cargar();
+                      },
+                    )
+                  : null,
+            ),
+          ),
+          const SizedBox(height: 16),
+          Wrap(
+            spacing: 12,
+            runSpacing: 12,
+            crossAxisAlignment: WrapCrossAlignment.center,
+            children: [
+              ConstrainedBox(
+                constraints: const BoxConstraints(minWidth: 190, maxWidth: 260),
+                child: DropdownButtonFormField<String>(
+                  key: ValueKey('cat_$_filtroCategoria'),
+                  initialValue: _filtroCategoria,
+                  isExpanded: true,
+                  decoration: const InputDecoration(
+                    labelText: 'Categoría',
+                    contentPadding: EdgeInsets.symmetric(
+                      horizontal: 14,
+                      vertical: 10,
+                    ),
+                  ),
+                  items: _categorias.map((categoria) {
+                    return DropdownMenuItem(
+                      value: categoria,
+                      child: Text(
+                        categoria == 'Todas'
+                            ? 'Todas las categorías'
+                            : categoria,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    );
+                  }).toList(),
+                  onChanged: (valor) {
+                    if (valor == null || valor == _filtroCategoria) return;
+                    setState(() => _filtroCategoria = valor);
+                    _cargar();
+                  },
+                ),
+              ),
+              ConstrainedBox(
+                constraints: const BoxConstraints(minWidth: 190, maxWidth: 260),
+                child: DropdownButtonFormField<String>(
+                  key: ValueKey('ord_$_orden'),
+                  initialValue: _orden,
+                  isExpanded: true,
+                  decoration: const InputDecoration(
+                    labelText: 'Ordenar por',
+                    contentPadding: EdgeInsets.symmetric(
+                      horizontal: 14,
+                      vertical: 10,
+                    ),
+                  ),
+                  items: const [
+                    DropdownMenuItem(
+                      value: 'recientes',
+                      child: Text('Más recientes'),
+                    ),
+                    DropdownMenuItem(
+                      value: 'fecha_servicio',
+                      child: Text('Fecha del servicio'),
+                    ),
+                  ],
+                  onChanged: (valor) {
+                    if (valor == null || valor == _orden) return;
+                    setState(() => _orden = valor);
+                    _cargar();
+                  },
+                ),
+              ),
+              if (_tieneFiltrosActivos)
+                TextButton.icon(
+                  onPressed: _limpiarFiltros,
+                  icon: const Icon(Icons.filter_alt_off_outlined, size: 18),
+                  label: const Text('Limpiar filtros'),
+                ),
+            ],
+          ),
+          const SizedBox(height: 14),
+          _filtrosEstado(),
+        ],
       ),
     );
   }
@@ -407,37 +585,49 @@ class _EstadoVistaMisServicios extends State<VistaMisServicios> {
                 ),
               ],
               const SizedBox(height: 14),
-              Row(
+              Wrap(
+                spacing: 12,
+                runSpacing: 6,
+                crossAxisAlignment: WrapCrossAlignment.center,
                 children: [
-                  const Icon(
-                    Icons.location_on_outlined,
-                    size: 16,
-                    color: ColoresApp.verdeAzulado,
-                  ),
-                  const SizedBox(width: 4),
-                  Expanded(
-                    child: Text(
-                      '${servicio['ciudad'] ?? ''} · ${servicio['sector'] ?? ''}',
-                      style: const TextStyle(
-                        fontSize: 12,
-                        color: ColoresApp.grisOscuro,
+                  Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      const Icon(
+                        Icons.location_on_outlined,
+                        size: 16,
+                        color: ColoresApp.verdeAzulado,
                       ),
-                      overflow: TextOverflow.ellipsis,
-                    ),
+                      const SizedBox(width: 4),
+                      Flexible(
+                        child: Text(
+                          '${servicio['ciudad'] ?? ''} · ${servicio['sector'] ?? ''}',
+                          style: const TextStyle(
+                            fontSize: 12,
+                            color: ColoresApp.grisOscuro,
+                          ),
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ),
+                    ],
                   ),
-                  const SizedBox(width: 12),
-                  const Icon(
-                    Icons.access_time_rounded,
-                    size: 16,
-                    color: ColoresApp.verdeAzulado,
-                  ),
-                  const SizedBox(width: 4),
-                  Text(
-                    _fecha(servicio['fechaServicio']),
-                    style: const TextStyle(
-                      fontSize: 12,
-                      color: ColoresApp.grisOscuro,
-                    ),
+                  Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      const Icon(
+                        Icons.access_time_rounded,
+                        size: 16,
+                        color: ColoresApp.verdeAzulado,
+                      ),
+                      const SizedBox(width: 4),
+                      Text(
+                        _fecha(servicio['fechaServicio']),
+                        style: const TextStyle(
+                          fontSize: 12,
+                          color: ColoresApp.grisOscuro,
+                        ),
+                      ),
+                    ],
                   ),
                 ],
               ),
@@ -522,6 +712,8 @@ class _EstadoVistaMisServicios extends State<VistaMisServicios> {
   }
 
   Widget _estadoVacio() {
+    final conFiltros = _tieneFiltrosActivos;
+
     return TarjetaHelpi(
       child: Padding(
         padding: const EdgeInsets.symmetric(vertical: 36, horizontal: 16),
@@ -534,36 +726,39 @@ class _EstadoVistaMisServicios extends State<VistaMisServicios> {
                 color: ColoresApp.verdeMenta,
                 shape: BoxShape.circle,
               ),
-              child: const Icon(
-                Icons.work_outline_rounded,
+              child: Icon(
+                conFiltros
+                    ? Icons.search_off_rounded
+                    : Icons.work_outline_rounded,
                 size: 32,
                 color: ColoresApp.verdeAzulado,
               ),
             ),
             const SizedBox(height: 16),
             Text(
-              'Aún no hay actividades aquí',
+              conFiltros
+                  ? 'No hay resultados para estos filtros'
+                  : 'No tienes servicios',
+              textAlign: TextAlign.center,
               style: Theme.of(context).textTheme.titleLarge
                   ?.copyWith(fontSize: 18),
             ),
             const SizedBox(height: 8),
             Text(
-              _filtroEstado != 'Todas'
-                  ? 'No hay servicios con estado "$_filtroEstado".'
+              conFiltros
+                  ? 'Ningún servicio coincide con la combinación de estado, categoría o prefijo de título seleccionada.'
                   : (_modoPrestador
                         ? 'Cuando aceptes servicios en la comunidad aparecerán en este espacio.'
                         : 'Las solicitudes que publiques para recibir ayuda aparecerán aquí.'),
               textAlign: TextAlign.center,
               style: const TextStyle(color: ColoresApp.grisOscuro),
             ),
-            if (_filtroEstado != 'Todas') ...[
-              const SizedBox(height: 14),
-              TextButton(
-                onPressed: () {
-                  setState(() => _filtroEstado = 'Todas');
-                  _cargar();
-                },
-                child: const Text('Ver todos los estados'),
+            if (conFiltros) ...[
+              const SizedBox(height: 16),
+              OutlinedButton.icon(
+                onPressed: _limpiarFiltros,
+                icon: const Icon(Icons.filter_alt_off_outlined, size: 18),
+                label: const Text('Limpiar filtros'),
               ),
             ],
           ],
@@ -600,7 +795,7 @@ class _EstadoVistaMisServicios extends State<VistaMisServicios> {
               ),
             ),
             IconButton(
-              onPressed: _cargando ? null : () => _cargar(),
+              onPressed: (_cargando || _cargandoMas) ? null : () => _cargar(),
               tooltip: 'Actualizar',
               icon: const Icon(Icons.refresh, color: ColoresApp.verdeAzulado),
             ),
@@ -608,8 +803,8 @@ class _EstadoVistaMisServicios extends State<VistaMisServicios> {
         ),
         const SizedBox(height: 16),
         _selectorModo(),
-        const SizedBox(height: 14),
-        _filtrosEstado(),
+        const SizedBox(height: 16),
+        _panelFiltros(),
         const SizedBox(height: 20),
         if (_error != null)
           Padding(
@@ -623,10 +818,51 @@ class _EstadoVistaMisServicios extends State<VistaMisServicios> {
                     style: const TextStyle(color: ColoresApp.coral),
                   ),
                   const SizedBox(height: 12),
-                  TextButton.icon(
-                    onPressed: _cargando ? null : () => _cargar(),
-                    icon: const Icon(Icons.refresh),
-                    label: const Text('Reintentar'),
+                  Wrap(
+                    alignment: WrapAlignment.center,
+                    spacing: 12,
+                    runSpacing: 8,
+                    children: [
+                      if (_requiereAceptarTerminos)
+                        FilledButton.icon(
+                          onPressed: (_cargando || _cargandoMas)
+                              ? null
+                              : () async {
+                                  final perfil = await RepositorioPerfil()
+                                      .leer();
+                                  if (!context.mounted) return;
+                                  final perfilActualizado =
+                                      await Navigator.of(
+                                        context,
+                                      ).push<Map<String, dynamic>>(
+                                        MaterialPageRoute<Map<String, dynamic>>(
+                                          builder: (_) => PantallaTerminos(
+                                            modo: ModoTerminos.obligatorio,
+                                            perfil: perfil,
+                                            retornarAlAceptar: true,
+                                          ),
+                                        ),
+                                      );
+
+                                  if (!mounted) return;
+                                  if (perfilActualizado != null) {
+                                    widget.alActualizarPerfil?.call(
+                                      perfilActualizado,
+                                    );
+                                    await _cargar();
+                                  }
+                                },
+                          icon: const Icon(Icons.gavel_rounded, size: 18),
+                          label: const Text('Revisar y aceptar términos'),
+                        ),
+                      TextButton.icon(
+                        onPressed: (_cargando || _cargandoMas)
+                            ? null
+                            : () => _cargar(),
+                        icon: const Icon(Icons.refresh),
+                        label: const Text('Reintentar'),
+                      ),
+                    ],
                   ),
                 ],
               ),
@@ -634,16 +870,20 @@ class _EstadoVistaMisServicios extends State<VistaMisServicios> {
           ),
         if (!_cargando && _error == null && _servicios.isEmpty) _estadoVacio(),
         ..._servicios.map(_tarjeta),
-        if (_cargando)
+        if (_cargando || _cargandoMas)
           const Padding(
             padding: EdgeInsets.all(32),
             child: Center(child: CircularProgressIndicator()),
           ),
-        if (!_cargando && _cursor != null && _error == null) ...[
+        if (!_cargando &&
+            !_cargandoMas &&
+            _cursor != null &&
+            _error == null) ...[
           const SizedBox(height: 8),
-          OutlinedButton(
+          OutlinedButton.icon(
             onPressed: () => _cargar(mas: true),
-            child: const Text('Cargar más'),
+            icon: const Icon(Icons.expand_more_rounded),
+            label: const Text('Cargar más'),
           ),
         ],
       ],

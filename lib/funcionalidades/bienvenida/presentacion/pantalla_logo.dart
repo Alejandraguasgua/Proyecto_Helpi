@@ -32,24 +32,16 @@ class _EstadoPantallaLogo extends State<PantallaLogo> {
 
     try {
       // Espera a que Firebase restaure la sesión guardada.
-      final usuario =
-          await FirebaseAuth.instance.authStateChanges().first;
+      final usuario = await FirebaseAuth.instance.authStateChanges().first;
 
-      Widget destino;
-
-      if (usuario == null) {
-        destino = const PantallaBienvenida();
-      } else {
-        destino = await destinoTrasSesion();
-      }
+      final Widget destino = usuario == null
+          ? const PantallaBienvenida()
+          : await destinoTrasSesion(usuario: usuario);
 
       if (!mounted) return;
 
-      Navigator.of(context).pushReplacement(
-        MaterialPageRoute<void>(
-          builder: (_) => destino,
-        ),
-      );
+      Navigator.of(context)
+          .pushReplacement(MaterialPageRoute<void>(builder: (_) => destino));
     } catch (error) {
       debugPrint('Error al recuperar el perfil: $error');
 
@@ -57,7 +49,8 @@ class _EstadoPantallaLogo extends State<PantallaLogo> {
 
       setState(() {
         _cargando = false;
-        _error = 'No pudimos cargar tu perfil. '
+        _error =
+            'No pudimos cargar tu perfil. '
             'Revisa tu conexión e intenta nuevamente.';
       });
     }
@@ -77,9 +70,7 @@ class _EstadoPantallaLogo extends State<PantallaLogo> {
       if (!mounted) return;
 
       Navigator.of(context).pushReplacement(
-        MaterialPageRoute<void>(
-          builder: (_) => const PantallaBienvenida(),
-        ),
+        MaterialPageRoute<void>(builder: (_) => const PantallaBienvenida()),
       );
     } catch (error) {
       debugPrint('Error al cerrar sesión: $error');
@@ -112,10 +103,7 @@ class _EstadoPantallaLogo extends State<PantallaLogo> {
               if (_error == null)
                 const CircularProgressIndicator()
               else ...[
-                Text(
-                  _error!,
-                  textAlign: TextAlign.center,
-                ),
+                Text(_error!, textAlign: TextAlign.center),
                 const SizedBox(height: 16),
                 FilledButton(
                   onPressed: _abrirAplicacion,

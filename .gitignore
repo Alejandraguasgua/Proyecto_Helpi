@@ -46,4 +46,6 @@ app.*.map.json
 
 # Widget Preview related
 .widget_preview/
+
+# Configuración local de Mapbox
 .env.mapbox

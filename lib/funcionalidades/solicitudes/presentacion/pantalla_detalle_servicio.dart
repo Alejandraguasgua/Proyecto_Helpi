@@ -3,7 +3,9 @@ import 'package:flutter/material.dart';
 
 import '../../../nucleo/componentes/componentes_helpi.dart';
 import '../../../nucleo/tema/colores_app.dart';
+import '../../inicio/presentacion/pantalla_perfil_prestador.dart';
 import '../datos/repositorio_solicitudes.dart';
+import 'pantalla_solicitud.dart';
 
 class PantallaDetalleServicio extends StatefulWidget {
   const PantallaDetalleServicio({super.key, required this.id});
@@ -86,6 +88,192 @@ class _EstadoPantallaDetalleServicio extends State<PantallaDetalleServicio> {
       if (mounted) {
         setState(() {
           _cargando = false;
+        });
+      }
+    }
+  }
+
+  Future<void> _editarSolicitud() async {
+    if (_procesando || _cargando || _servicio == null) return;
+
+    final editada = await Navigator.of(context).push<bool>(
+      MaterialPageRoute<bool>(
+        builder: (_) => PantallaSolicitud(
+          modo: ModoFormularioSolicitud.editar,
+          solicitudInicial: _servicio,
+        ),
+      ),
+    );
+
+    if (!mounted) return;
+
+    if (editada == true) {
+      _huboCambios = true;
+      aviso(context, 'Solicitud actualizada.');
+      await _cargar();
+    }
+  }
+
+  Future<void> _duplicarSolicitud() async {
+    if (_procesando || _cargando || _servicio == null) return;
+
+    final duplicada = await Navigator.of(context).push<bool>(
+      MaterialPageRoute<bool>(
+        builder: (_) => PantallaSolicitud(
+          modo: ModoFormularioSolicitud.duplicar,
+          solicitudInicial: _servicio,
+        ),
+      ),
+    );
+
+    if (!mounted) return;
+
+    if (duplicada == true) {
+      _huboCambios = true;
+      aviso(context, 'Solicitud similar publicada correctamente.');
+      await _cargar();
+    }
+  }
+
+  Future<void> _abrirDialogoCalificar() async {
+    if (_procesando || _cargando || _servicio == null) return;
+
+    int estrellasSeleccionadas = 5;
+    final controladorComentario = TextEditingController();
+    final formulario = GlobalKey<FormState>();
+
+    final resultado = await showDialog<Map<String, dynamic>>(
+      context: context,
+      builder: (dialogo) {
+        return StatefulBuilder(
+          builder: (contextoDialogo, actualizarDialogo) {
+            return AlertDialog(
+              title: const Text('Calificar al prestador'),
+              content: SingleChildScrollView(
+                child: Form(
+                  key: formulario,
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      Text(
+                        '¿Cómo fue tu experiencia con ${_perfilPrestador?['nombre'] ?? 'el prestador'}?',
+                        style: const TextStyle(
+                          fontSize: 13,
+                          color: ColoresApp.grisOscuro,
+                        ),
+                      ),
+                      const SizedBox(height: 14),
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: List.generate(5, (indice) {
+                          final valor = indice + 1;
+                          final activa = valor <= estrellasSeleccionadas;
+                          return IconButton(
+                            onPressed: () {
+                              actualizarDialogo(() {
+                                estrellasSeleccionadas = valor;
+                              });
+                            },
+                            iconSize: 34,
+                            icon: Icon(
+                              activa
+                                  ? Icons.star_rounded
+                                  : Icons.star_border_rounded,
+                              color: activa
+                                  ? const Color(0xFFF59E0B)
+                                  : const Color(0xFFCBD5E1),
+                            ),
+                            tooltip: '$valor estrellas',
+                          );
+                        }),
+                      ),
+                      Text(
+                        '$estrellasSeleccionadas de 5 estrellas',
+                        textAlign: TextAlign.center,
+                        style: const TextStyle(
+                          fontSize: 12,
+                          fontWeight: FontWeight.w700,
+                          color: ColoresApp.azulMarino,
+                        ),
+                      ),
+                      const SizedBox(height: 16),
+                      TextFormField(
+                        controller: controladorComentario,
+                        maxLines: 3,
+                        maxLength: 500,
+                        textCapitalization: TextCapitalization.sentences,
+                        decoration: const InputDecoration(
+                          labelText: 'Comentario (opcional)',
+                          hintText: 'Comparte cómo resultó el servicio…',
+                        ),
+                        validator: (valor) {
+                          final texto = valor?.trim() ?? '';
+                          if (texto.length > 500) {
+                            return 'El comentario no puede superar 500 caracteres.';
+                          }
+                          return null;
+                        },
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(dialogo),
+                  child: const Text('Cancelar'),
+                ),
+                FilledButton.icon(
+                  onPressed: () {
+                    if (formulario.currentState!.validate()) {
+                      Navigator.pop(dialogo, <String, dynamic>{
+                        'estrellas': estrellasSeleccionadas,
+                        'comentario': controladorComentario.text.trim(),
+                      });
+                    }
+                  },
+                  icon: const Icon(Icons.send_rounded, size: 18),
+                  label: const Text('Enviar calificación'),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
+
+    controladorComentario.dispose();
+
+    if (!mounted || resultado == null) return;
+
+    setState(() {
+      _procesando = true;
+    });
+
+    try {
+      await _repositorio.calificar(
+        widget.id,
+        estrellas: resultado['estrellas'] as int,
+        comentario: resultado['comentario'] as String,
+      );
+
+      if (!mounted) return;
+
+      _huboCambios = true;
+      aviso(
+        context,
+        '¡Gracias! Tu calificación fue registrada y el perfil del prestador se actualizó.',
+      );
+      await _cargar();
+    } catch (error) {
+      if (!mounted) return;
+      aviso(context, _mensaje(error));
+      await _cargar();
+    } finally {
+      if (mounted) {
+        setState(() {
+          _procesando = false;
         });
       }
     }
@@ -402,16 +590,43 @@ class _EstadoPantallaDetalleServicio extends State<PantallaDetalleServicio> {
                 if (promedio != null) ...[
                   const SizedBox(height: 2),
                   Text(
-                    '★ $promedio ($totalCalificaciones calificaciones)',
+                    '★ ${(promedio is num ? promedio.toDouble().toStringAsFixed(1) : promedio)} ($totalCalificaciones calificaciones)',
                     style: const TextStyle(
                       fontSize: 11,
                       color: ColoresApp.grisOscuro,
+                    ),
+                  ),
+                ] else if (uid != null && rol == 'Prestador') ...[
+                  const SizedBox(height: 2),
+                  const Text(
+                    'Sin calificaciones todavía · Ver perfil',
+                    style: TextStyle(
+                      fontSize: 11,
+                      color: ColoresApp.verdeAzulado,
                     ),
                   ),
                 ],
               ],
             ),
           ),
+          if (uid != null && uid.isNotEmpty)
+            IconButton(
+              onPressed: () {
+                Navigator.of(context).push(
+                  MaterialPageRoute<void>(
+                    builder: (_) => PantallaPerfilPrestador(
+                      uidPrestador: uid,
+                      perfilInicial: perfil,
+                    ),
+                  ),
+                );
+              },
+              tooltip: 'Ver perfil y reseñas',
+              icon: const Icon(
+                Icons.chevron_right_rounded,
+                color: ColoresApp.verdeAzulado,
+              ),
+            ),
         ],
       ),
     );
@@ -970,7 +1185,7 @@ class _EstadoPantallaDetalleServicio extends State<PantallaDetalleServicio> {
             ),
           ],
 
-          if (estado == 'Completada')
+          if (estado == 'Completada') ...[
             Container(
               padding: const EdgeInsets.all(14),
               decoration: BoxDecoration(
@@ -998,6 +1213,73 @@ class _EstadoPantallaDetalleServicio extends State<PantallaDetalleServicio> {
                 ],
               ),
             ),
+            if (servicio['calificadaPorSolicitante'] == true &&
+                servicio['calificacionSolicitante'] is Map) ...[
+              const SizedBox(height: 14),
+              Builder(
+                builder: (_) {
+                  final cal = Map<String, dynamic>.from(
+                    servicio['calificacionSolicitante'] as Map,
+                  );
+                  final estrellas = (cal['estrellas'] as num?)?.toInt() ?? 5;
+                  final comentario = (cal['comentario'] ?? '')
+                      .toString()
+                      .trim();
+
+                  return Container(
+                    padding: const EdgeInsets.all(14),
+                    decoration: BoxDecoration(
+                      color: ColoresApp.grisClaro,
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(color: const Color(0xFFE2E8F0)),
+                    ),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Row(
+                          children: [
+                            const Icon(
+                              Icons.star_rounded,
+                              color: Color(0xFFF59E0B),
+                              size: 20,
+                            ),
+                            const SizedBox(width: 6),
+                            Text(
+                              'Calificación enviada ($estrellas/5 ★)',
+                              style: const TextStyle(
+                                fontSize: 13,
+                                fontWeight: FontWeight.w700,
+                                color: ColoresApp.azulMarino,
+                              ),
+                            ),
+                          ],
+                        ),
+                        if (comentario.isNotEmpty) ...[
+                          const SizedBox(height: 6),
+                          Text(
+                            comentario,
+                            style: const TextStyle(
+                              fontSize: 13,
+                              color: ColoresApp.grisOscuro,
+                            ),
+                          ),
+                        ],
+                      ],
+                    ),
+                  );
+                },
+              ),
+            ] else if (esSolicitante &&
+                servicio['prestadorUid'] != null &&
+                servicio['calificadaPorSolicitante'] != true) ...[
+              const SizedBox(height: 14),
+              FilledButton.icon(
+                onPressed: bloqueado ? null : _abrirDialogoCalificar,
+                icon: const Icon(Icons.star_outline_rounded),
+                label: const Text('Calificar al prestador'),
+              ),
+            ],
+          ],
 
           if (puedeCancelar) ...[
             const SizedBox(height: 18),
@@ -1010,6 +1292,31 @@ class _EstadoPantallaDetalleServicio extends State<PantallaDetalleServicio> {
               style: OutlinedButton.styleFrom(
                 foregroundColor: ColoresApp.coral,
                 side: const BorderSide(color: ColoresApp.coral),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(12),
+                ),
+              ),
+            ),
+          ],
+
+          if (esSolicitante && estado == 'Publicada') ...[
+            const SizedBox(height: 14),
+            FilledButton.icon(
+              onPressed: bloqueado ? null : _editarSolicitud,
+              icon: const Icon(Icons.edit_outlined, size: 18),
+              label: const Text('Editar solicitud'),
+            ),
+          ],
+
+          if (esSolicitante) ...[
+            const SizedBox(height: 12),
+            OutlinedButton.icon(
+              onPressed: bloqueado ? null : _duplicarSolicitud,
+              icon: const Icon(Icons.copy_all_outlined, size: 18),
+              label: const Text('Crear solicitud similar'),
+              style: OutlinedButton.styleFrom(
+                foregroundColor: ColoresApp.verdeAzulado,
+                side: const BorderSide(color: ColoresApp.verdeAzulado),
                 shape: RoundedRectangleBorder(
                   borderRadius: BorderRadius.circular(12),
                 ),

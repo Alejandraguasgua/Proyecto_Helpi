@@ -6,12 +6,17 @@ import '../../bienvenida/presentacion/pantalla_bienvenida.dart';
 import '../../inicio/presentacion/pantalla_inicio.dart';
 import '../../registro/datos/repositorio_perfil.dart';
 import '../../registro/presentacion/pantalla_roles.dart';
+import '../../terminos/presentacion/pantalla_terminos.dart';
 import '../datos/repositorio_admin.dart';
 import 'pantalla_admin.dart';
 
 /// Decide a qué pantalla va el usuario autenticado:
-/// administrador, cuenta suspendida, registro pendiente o inicio.
-Future<Widget> destinoTrasSesion() async {
+/// bienvenida, administrador, registro pendiente, cuenta suspendida,
+/// aceptación obligatoria de términos o inicio.
+Future<Widget> destinoTrasSesion({User? usuario}) async {
+  final usuarioActual = usuario ?? FirebaseAuth.instance.currentUser;
+  if (usuarioActual == null) return const PantallaBienvenida();
+
   if (await RepositorioAdmin().esAdministrador()) {
     return const PantallaAdmin();
   }
@@ -20,6 +25,12 @@ Future<Widget> destinoTrasSesion() async {
 
   if (perfil == null) return const PantallaRoles();
   if (perfil['suspendido'] == true) return const PantallaSuspendida();
+  if (!RepositorioPerfil.tieneAceptacionVigente(
+    perfil,
+    uidAutenticado: usuarioActual.uid,
+  )) {
+    return PantallaTerminos(modo: ModoTerminos.obligatorio, perfil: perfil);
+  }
 
   return PantallaInicio(perfil: perfil);
 }

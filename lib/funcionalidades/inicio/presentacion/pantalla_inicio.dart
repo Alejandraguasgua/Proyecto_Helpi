@@ -11,12 +11,17 @@ import '../../registro/datos/repositorio_perfil.dart';
 
 import 'componentes/barra_superior_helpi.dart';
 import 'componentes/selector_categorias.dart';
+import 'pantalla_editar_perfil.dart';
 import 'pantalla_elegir_ubicacion.dart';
+import 'pantalla_perfil_prestador.dart';
 import 'vista_prestador.dart';
+import '../../notificaciones/presentacion/vista_notificaciones.dart';
 import '../../solicitudes/presentacion/pantalla_solicitud.dart';
 import '../../solicitudes/presentacion/vista_mis_servicios.dart';
+import '../../terminos/presentacion/pantalla_terminos.dart';
 
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:firebase_core/firebase_core.dart';
 
 import '../../bienvenida/presentacion/pantalla_bienvenida.dart';
 
@@ -30,7 +35,7 @@ class PantallaInicio extends StatefulWidget {
 }
 
 class _EstadoPantallaInicio extends State<PantallaInicio> {
-  final _preferencias = SharedPreferencesAsync();
+  SharedPreferencesAsync get _preferencias => SharedPreferencesAsync();
 
   late Map<String, dynamic> _perfil;
 
@@ -40,6 +45,9 @@ class _EstadoPantallaInicio extends State<PantallaInicio> {
   bool _guardandoFoto = false;
   bool _abriendoUbicacion = false;
   bool _cerrandoSesion = false;
+  bool _eliminandoCuenta = false;
+  bool _cargandoPerfil = false;
+  String? _errorPerfil;
 
   String _ciudad = 'Riobamba';
   String _sector = '';
@@ -83,7 +91,11 @@ class _EstadoPantallaInicio extends State<PantallaInicio> {
       _foto = foto;
     }
 
-    _cargarPreferencias();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) {
+        _cargarPreferencias();
+      }
+    });
   }
 
   Future<void> _cargarPreferencias() async {
@@ -151,16 +163,24 @@ class _EstadoPantallaInicio extends State<PantallaInicio> {
 
     setState(() => _guardandoRol = true);
 
-    final actualizado = <String, dynamic>{..._perfil, 'rol': rol};
-
     try {
-      await RepositorioPerfil().guardar(actualizado);
+      Map<String, dynamic> actualizado;
+      try {
+        actualizado = await RepositorioPerfil().actualizarCampos({'rol': rol});
+      } catch (_) {
+        actualizado = <String, dynamic>{..._perfil, 'rol': rol};
+        await RepositorioPerfil().guardar(actualizado);
+      }
 
       if (!mounted) return;
 
       setState(() {
-        _perfil = actualizado;
-        _seccion = 0;
+        _perfil = <String, dynamic>{
+          ..._perfil,
+          ...actualizado,
+          'rol': rol,
+          if (_foto != null) 'foto': _foto,
+        };
       });
     } catch (_) {
       if (mounted) {
@@ -169,6 +189,125 @@ class _EstadoPantallaInicio extends State<PantallaInicio> {
     } finally {
       if (mounted) {
         setState(() => _guardandoRol = false);
+      }
+    }
+  }
+
+  Future<void> _editarPerfil() async {
+    final resultado = await Navigator.of(context).push<Map<String, dynamic>>(
+      MaterialPageRoute<Map<String, dynamic>>(
+        builder: (_) => PantallaEditarPerfil(perfil: _perfil),
+      ),
+    );
+
+    if (!mounted || resultado == null) return;
+
+    final nuevaCiudad = (resultado['ciudad'] ?? '').toString().trim();
+    final nuevoSector = (resultado['sector'] ?? '').toString().trim();
+
+    setState(() {
+      _perfil = <String, dynamic>{
+        ..._perfil,
+        ...resultado,
+        if (_foto != null) 'foto': _foto,
+      };
+      if (nuevaCiudad.isNotEmpty) {
+        _ciudad = nuevaCiudad;
+      }
+      if (nuevoSector.isNotEmpty) {
+        _sector = nuevoSector;
+      }
+    });
+
+    aviso(context, 'Tu perfil se actualizó correctamente.');
+  }
+
+  Future<void> _eliminarCuenta() async {
+    if (_eliminandoCuenta || _cerrandoSesion) return;
+
+    final confirmado = await showDialog<bool>(
+      context: context,
+      builder: (dialogo) => AlertDialog(
+        title: const Row(
+          children: [
+            Icon(Icons.warning_amber_rounded, color: ColoresApp.coral),
+            SizedBox(width: 8),
+            Expanded(child: Text('Eliminar cuenta de Helpi')),
+          ],
+        ),
+        content: const SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                'Esta acción es permanente e irreversible:',
+                style: TextStyle(
+                  fontWeight: FontWeight.w700,
+                  color: ColoresApp.azulMarino,
+                ),
+              ),
+              SizedBox(height: 10),
+              Text(
+                '• Se eliminarán tu cuenta de autenticación y los datos personales de tu perfil (nombre, teléfono, correo, ubicación y presentación).\n'
+                '• Si tienes servicios activos (publicados, aceptados o en proceso), deberás cancelarlos o finalizarlos antes de poder eliminar tu cuenta.\n'
+                '• Las calificaciones emitidas en servicios completados se conservarán de forma anónima ("Usuario eliminado") para mantener la integridad del historial de la comunidad sin exponer tus datos personales.\n'
+                '• Se te pedirá verificar nuevamente tu identidad con Google para confirmar la operación.',
+                style: TextStyle(
+                  fontSize: 13,
+                  color: ColoresApp.grisOscuro,
+                  height: 1.45,
+                ),
+              ),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogo, false),
+            child: const Text('Cancelar'),
+          ),
+          FilledButton(
+            style: FilledButton.styleFrom(backgroundColor: ColoresApp.coral),
+            onPressed: () => Navigator.pop(dialogo, true),
+            child: const Text('Verificar identidad y eliminar'),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmado != true || !mounted) return;
+
+    setState(() {
+      _eliminandoCuenta = true;
+    });
+
+    try {
+      await RepositorioPerfil().eliminarCuenta();
+
+      if (!mounted) return;
+
+      aviso(context, 'Tu cuenta y tus datos personales fueron eliminados.');
+
+      Navigator.of(context).pushAndRemoveUntil<void>(
+        MaterialPageRoute<void>(builder: (_) => const PantallaBienvenida()),
+        (ruta) => false,
+      );
+    } catch (error) {
+      if (!mounted) return;
+
+      final mensaje = error.toString().replaceFirst('Exception: ', '');
+      aviso(
+        context,
+        mensaje.isNotEmpty
+            ? mensaje
+            : 'No se pudo completar la eliminación de la cuenta.',
+      );
+    } finally {
+      if (mounted) {
+        setState(() {
+          _eliminandoCuenta = false;
+        });
       }
     }
   }
@@ -435,7 +574,11 @@ class _EstadoPantallaInicio extends State<PantallaInicio> {
                         final publicada = await Navigator.of(context)
                             .push<bool>(
                               MaterialPageRoute(
-                                builder: (_) => const PantallaSolicitud(),
+                                builder: (_) => PantallaSolicitud(
+                                  categoriaInicial: _categoria == 'Todas'
+                                      ? null
+                                      : _categoria,
+                                ),
                               ),
                             );
 
@@ -467,44 +610,23 @@ class _EstadoPantallaInicio extends State<PantallaInicio> {
   }
 
   Widget _misServicios() {
-    return VistaMisServicios(esPrestador: _esPrestador);
+    return VistaMisServicios(
+      esPrestador: _esPrestador,
+      alActualizarPerfil: (perfilActualizado) {
+        if (!mounted) return;
+        setState(() {
+          _perfil = <String, dynamic>{
+            ..._perfil,
+            ...perfilActualizado,
+            if (_foto != null) 'foto': _foto,
+          };
+        });
+      },
+    );
   }
 
   Widget _notificaciones() {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        Text(
-          'Notificaciones',
-          style: Theme.of(context).textTheme.headlineLarge,
-        ),
-
-        const SizedBox(height: 22),
-
-        const TarjetaHelpi(
-          child: Column(
-            children: [
-              Icon(
-                Icons.notifications_none,
-                size: 48,
-                color: ColoresApp.verdeAzulado,
-              ),
-
-              SizedBox(height: 16),
-
-              Text('No tienes notificaciones.', textAlign: TextAlign.center),
-
-              SizedBox(height: 10),
-
-              Text(
-                'Aquí aparecerán tus avisos cuando estén disponibles.',
-                textAlign: TextAlign.center,
-              ),
-            ],
-          ),
-        ),
-      ],
-    );
+    return const VistaNotificaciones();
   }
 
   Widget _datoPerfil(String etiqueta, String valor) {
@@ -563,122 +685,458 @@ class _EstadoPantallaInicio extends State<PantallaInicio> {
     }
   }
 
+  Future<void> _cargarPerfil({bool mostrarAvisoExito = false}) async {
+    if (_cargandoPerfil) return;
+
+    setState(() {
+      _cargandoPerfil = true;
+      _errorPerfil = null;
+    });
+
+    try {
+      final perfilRemoto = await RepositorioPerfil().leer();
+
+      if (!mounted) return;
+
+      if (perfilRemoto != null) {
+        final nuevaCiudad = (perfilRemoto['ciudad'] ?? '').toString().trim();
+        final nuevoSector = (perfilRemoto['sector'] ?? '').toString().trim();
+
+        setState(() {
+          _perfil = <String, dynamic>{
+            ..._perfil,
+            ...perfilRemoto,
+            if (_foto != null) 'foto': _foto,
+          };
+          if (nuevaCiudad.isNotEmpty) {
+            _ciudad = nuevaCiudad;
+          }
+          if (nuevoSector.isNotEmpty) {
+            _sector = nuevoSector;
+          }
+          _cargandoPerfil = false;
+        });
+
+        if (mostrarAvisoExito) {
+          aviso(context, 'Perfil actualizado.');
+        }
+      } else {
+        setState(() {
+          _cargandoPerfil = false;
+          if (_perfil.isEmpty) {
+            _errorPerfil = 'No encontramos los datos de tu perfil.';
+          }
+        });
+      }
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        _cargandoPerfil = false;
+        _errorPerfil =
+            'No pudimos sincronizar tu perfil desde el servidor. '
+            'Revisa tu conexión e inténtalo nuevamente.';
+      });
+    }
+  }
+
+  void _seleccionarSeccion(int indice) {
+    setState(() => _seccion = indice);
+    if (indice == 3) {
+      _cargarPerfil();
+    }
+  }
+
   Widget _perfilUsuario() {
     final categorias = _perfil['categorias'];
     final textoCategorias = categorias is List
         ? categorias.join(', ')
         : (categorias ?? '').toString();
 
+    final promedioRaw = _perfil['promedio'];
+    final promedio = promedioRaw is num ? promedioRaw.toDouble() : null;
+    final totalCalificaciones =
+        (_perfil['totalCalificaciones'] as num?)?.toInt() ?? 0;
+    final uidActual =
+        (_perfil['uid'] ??
+                (Firebase.apps.isNotEmpty
+                    ? FirebaseAuth.instance.currentUser?.uid
+                    : null) ??
+                '')
+            .toString();
+
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        Text('Mi perfil', style: Theme.of(context).textTheme.headlineLarge),
-
-        const SizedBox(height: 22),
-
-        TarjetaHelpi(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              Center(
-                child: CircleAvatar(
-                  radius: 46,
-                  backgroundColor: ColoresApp.verdeMenta,
-                  backgroundImage: _foto == null ? null : MemoryImage(_foto!),
-                  child: _foto == null
-                      ? const Icon(
-                          Icons.person_outline,
-                          size: 44,
-                          color: ColoresApp.verdeAzulado,
-                        )
-                      : null,
+        Row(
+          children: [
+            Expanded(
+              child: Text(
+                'Mi perfil',
+                style: Theme.of(context).textTheme.headlineLarge,
+              ),
+            ),
+            IconButton(
+              onPressed:
+                  (_cargandoPerfil || _cerrandoSesion || _eliminandoCuenta)
+                  ? null
+                  : () => _cargarPerfil(mostrarAvisoExito: true),
+              tooltip: 'Actualizar perfil',
+              icon: const Icon(Icons.refresh, color: ColoresApp.verdeAzulado),
+            ),
+            const SizedBox(width: 4),
+            FilledButton.tonalIcon(
+              style: FilledButton.styleFrom(
+                minimumSize: const Size(0, 42),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 14,
+                  vertical: 10,
                 ),
               ),
-
-              const SizedBox(height: 14),
-
-              Text(
-                _nombre,
-                textAlign: TextAlign.center,
-                style: Theme.of(context).textTheme.titleLarge,
-              ),
-
-              const SizedBox(height: 8),
-
-              TextButton.icon(
-                onPressed: _guardandoFoto ? null : _elegirFoto,
-                icon: const Icon(Icons.photo_library_outlined),
-                label: Text(
-                  _guardandoFoto ? 'Procesando…' : 'Cambiar foto de perfil',
-                ),
-              ),
-
-              if (_foto != null)
-                TextButton(
-                  onPressed: _guardandoFoto ? null : _quitarFoto,
-                  child: const Text('Quitar foto'),
-                ),
-
-              const SizedBox(height: 20),
-              const Divider(),
-              const SizedBox(height: 16),
-
-              _datoPerfil(
-                'Rol activo',
-                _esPrestador ? 'Prestador' : 'Solicitante',
-              ),
-
-              _datoPerfil('Teléfono', '${_perfil['telefono'] ?? ''}'),
-
-              _datoPerfil(
-                'Ciudad del perfil',
-                (_perfil['ciudad'] ?? '').toString(),
-              ),
-
-              _datoPerfil(
-                'Sector del perfil',
-                (_perfil['sector'] ?? '').toString(),
-              ),
-
-              _datoPerfil('Categorías', textoCategorias),
-
-              _datoPerfil(
-                'Habilidades',
-                (_perfil['habilidades'] ?? '').toString(),
-              ),
-
-              _datoPerfil(
-                'Sobre mí',
-                (_perfil['presentacion'] ?? '').toString(),
-              ),
-
-              _datoPerfil(
-                'Disponibilidad',
-                (_perfil['disponibilidad'] ?? '').toString(),
-              ),
-
-              const SizedBox(height: 8),
-
-              const Text(
-                'Sin calificaciones todavía.',
-                style: TextStyle(fontSize: 12),
-              ),
-              const SizedBox(height: 24),
-
-              const Divider(),
-
-              const SizedBox(height: 16),
-
-              OutlinedButton.icon(
-                onPressed: _cerrandoSesion ? null : _cerrarSesion,
-                icon: const Icon(Icons.logout),
-                label: Text(
-                  _cerrandoSesion ? 'Cerrando sesión…' : 'Cerrar sesión',
-                ),
-              ),
-            ],
-          ),
+              onPressed: (_cerrandoSesion || _eliminandoCuenta)
+                  ? null
+                  : _editarPerfil,
+              icon: const Icon(Icons.edit_outlined, size: 18),
+              label: const Text('Editar perfil'),
+            ),
+          ],
         ),
+
+        if (_cargandoPerfil) ...[
+          const SizedBox(height: 12),
+          const LinearProgressIndicator(),
+        ],
+
+        if (_errorPerfil != null) ...[
+          const SizedBox(height: 16),
+          TarjetaHelpi(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Text(
+                  _errorPerfil!,
+                  style: const TextStyle(color: ColoresApp.coral),
+                ),
+                const SizedBox(height: 10),
+                TextButton.icon(
+                  onPressed: _cargandoPerfil ? null : () => _cargarPerfil(),
+                  icon: const Icon(Icons.refresh),
+                  label: const Text('Reintentar'),
+                ),
+              ],
+            ),
+          ),
+        ],
+
+        if (_cargandoPerfil && _perfil.isEmpty) ...[
+          const SizedBox(height: 48),
+          const Center(child: CircularProgressIndicator()),
+        ] else ...[
+          const SizedBox(height: 22),
+
+          TarjetaHelpi(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Center(
+                  child: CircleAvatar(
+                    radius: 46,
+                    backgroundColor: ColoresApp.verdeMenta,
+                    backgroundImage: _foto == null ? null : MemoryImage(_foto!),
+                    child: _foto == null
+                        ? const Icon(
+                            Icons.person_outline,
+                            size: 44,
+                            color: ColoresApp.verdeAzulado,
+                          )
+                        : null,
+                  ),
+                ),
+
+                const SizedBox(height: 14),
+
+                Text(
+                  _nombre.isEmpty ? 'Usuario de Helpi' : _nombre,
+                  textAlign: TextAlign.center,
+                  style: Theme.of(context).textTheme.titleLarge,
+                ),
+
+                const SizedBox(height: 8),
+
+                TextButton.icon(
+                  onPressed: _guardandoFoto ? null : _elegirFoto,
+                  icon: const Icon(Icons.photo_library_outlined),
+                  label: Text(
+                    _guardandoFoto ? 'Procesando…' : 'Cambiar foto de perfil',
+                  ),
+                ),
+
+                if (_foto != null)
+                  TextButton(
+                    onPressed: _guardandoFoto ? null : _quitarFoto,
+                    child: const Text('Quitar foto'),
+                  ),
+
+                const SizedBox(height: 16),
+
+                // Resumen de calificaciones y acceso a reseñas
+                Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 14,
+                    vertical: 12,
+                  ),
+                  decoration: BoxDecoration(
+                    color: ColoresApp.verdeMenta,
+                    borderRadius: BorderRadius.circular(14),
+                  ),
+                  child: Row(
+                    children: [
+                      const Icon(
+                        Icons.star_rounded,
+                        color: Color(0xFFF59E0B),
+                        size: 24,
+                      ),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Text(
+                          promedio != null
+                              ? '${promedio.toStringAsFixed(1)} ★ · $totalCalificaciones ${totalCalificaciones == 1 ? 'calificación' : 'calificaciones'}'
+                              : 'Sin calificaciones todavía.',
+                          style: const TextStyle(
+                            fontSize: 13,
+                            fontWeight: FontWeight.w700,
+                            color: ColoresApp.azulMarino,
+                          ),
+                        ),
+                      ),
+                      if (uidActual.isNotEmpty)
+                        TextButton(
+                          onPressed: () {
+                            Navigator.of(context).push(
+                              MaterialPageRoute<void>(
+                                builder: (_) => PantallaPerfilPrestador(
+                                  uidPrestador: uidActual,
+                                  perfilInicial: _perfil,
+                                ),
+                              ),
+                            );
+                          },
+                          child: const Text('Ver reseñas'),
+                        ),
+                    ],
+                  ),
+                ),
+
+                const SizedBox(height: 20),
+                const Divider(),
+                const SizedBox(height: 16),
+
+                const Text(
+                  'Rol activo',
+                  style: TextStyle(
+                    color: ColoresApp.verdeAzulado,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+                const SizedBox(height: 8),
+                Wrap(
+                  spacing: 10,
+                  runSpacing: 8,
+                  children: [
+                    ChoiceChip(
+                      label: const Text('Solicitante'),
+                      selected: !_esPrestador,
+                      selectedColor: ColoresApp.verdeMenta,
+                      onSelected: _guardandoRol
+                          ? null
+                          : (_) => _cambiarRol('solicitante'),
+                    ),
+                    ChoiceChip(
+                      label: const Text('Prestador'),
+                      selected: _esPrestador,
+                      selectedColor: ColoresApp.verdeMenta,
+                      onSelected: _guardandoRol
+                          ? null
+                          : (_) => _cambiarRol('prestador'),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 16),
+
+                _datoPerfil('Teléfono', '${_perfil['telefono'] ?? ''}'),
+
+                _datoPerfil(
+                  'Ciudad del perfil',
+                  (_perfil['ciudad'] ?? '').toString(),
+                ),
+
+                _datoPerfil(
+                  'Sector del perfil',
+                  (_perfil['sector'] ?? '').toString(),
+                ),
+
+                _datoPerfil('Categorías', textoCategorias),
+
+                _datoPerfil(
+                  'Habilidades',
+                  (_perfil['habilidades'] ?? '').toString(),
+                ),
+
+                _datoPerfil(
+                  'Sobre mí',
+                  (_perfil['presentacion'] ?? '').toString(),
+                ),
+
+                _datoPerfil(
+                  'Disponibilidad',
+                  (_perfil['disponibilidad'] ?? '').toString(),
+                ),
+
+                const SizedBox(height: 8),
+                const Divider(),
+                const SizedBox(height: 8),
+
+                ListTile(
+                  contentPadding: EdgeInsets.zero,
+                  leading: const Icon(
+                    Icons.description_outlined,
+                    color: ColoresApp.verdeAzulado,
+                  ),
+                  title: const Text(
+                    'Términos y condiciones',
+                    style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
+                  ),
+                  subtitle: const Text(
+                    'Versión 1.0 · Consulta',
+                    style: TextStyle(fontSize: 12),
+                  ),
+                  trailing: const Icon(Icons.chevron_right, size: 20),
+                  onTap: () {
+                    Navigator.of(context).push(
+                      MaterialPageRoute<void>(
+                        builder: (_) => const PantallaTerminos(
+                          modo: ModoTerminos.consulta,
+                          pestanaInicial: 0,
+                        ),
+                      ),
+                    );
+                  },
+                ),
+
+                ListTile(
+                  contentPadding: EdgeInsets.zero,
+                  leading: const Icon(
+                    Icons.privacy_tip_outlined,
+                    color: ColoresApp.verdeAzulado,
+                  ),
+                  title: const Text(
+                    'Política de privacidad',
+                    style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
+                  ),
+                  subtitle: const Text(
+                    'Tratamiento de datos personales',
+                    style: TextStyle(fontSize: 12),
+                  ),
+                  trailing: const Icon(Icons.chevron_right, size: 20),
+                  onTap: () {
+                    Navigator.of(context).push(
+                      MaterialPageRoute<void>(
+                        builder: (_) => const PantallaTerminos(
+                          modo: ModoTerminos.consulta,
+                          pestanaInicial: 1,
+                        ),
+                      ),
+                    );
+                  },
+                ),
+
+                const SizedBox(height: 8),
+                const Divider(),
+                const SizedBox(height: 16),
+
+                OutlinedButton.icon(
+                  onPressed: (_cerrandoSesion || _eliminandoCuenta)
+                      ? null
+                      : _cerrarSesion,
+                  icon: const Icon(Icons.logout),
+                  label: Text(
+                    _cerrandoSesion ? 'Cerrando sesión…' : 'Cerrar sesión',
+                  ),
+                ),
+              ],
+            ),
+          ),
+
+          const SizedBox(height: 20),
+
+          // Zona claramente identificada como acción irreversible
+          Container(
+            padding: const EdgeInsets.all(20),
+            decoration: BoxDecoration(
+              color: const Color(0xFFFFF5F5),
+              borderRadius: BorderRadius.circular(20),
+              border: Border.all(color: const Color(0xFFFCA5A5)),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                const Row(
+                  children: [
+                    Icon(
+                      Icons.warning_amber_rounded,
+                      color: ColoresApp.coral,
+                      size: 22,
+                    ),
+                    SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        'Zona de cuenta · Acción irreversible',
+                        style: TextStyle(
+                          fontSize: 15,
+                          fontWeight: FontWeight.w800,
+                          color: ColoresApp.azulMarino,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 8),
+                const Text(
+                  'Eliminar tu cuenta borrará de forma permanente tu acceso y los datos personales de tu perfil. No debes tener servicios activos pendientes.',
+                  style: TextStyle(
+                    fontSize: 13,
+                    color: ColoresApp.grisOscuro,
+                    height: 1.4,
+                  ),
+                ),
+                const SizedBox(height: 14),
+                OutlinedButton.icon(
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: ColoresApp.coral,
+                    side: const BorderSide(color: ColoresApp.coral),
+                  ),
+                  onPressed: (_eliminandoCuenta || _cerrandoSesion)
+                      ? null
+                      : _eliminarCuenta,
+                  icon: _eliminandoCuenta
+                      ? const SizedBox(
+                          width: 16,
+                          height: 16,
+                          child: CircularProgressIndicator(
+                            strokeWidth: 2,
+                            color: ColoresApp.coral,
+                          ),
+                        )
+                      : const Icon(Icons.delete_forever_outlined),
+                  label: Text(
+                    _eliminandoCuenta
+                        ? 'Eliminando cuenta…'
+                        : 'Eliminar cuenta',
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
       ],
     );
   }
@@ -720,9 +1178,7 @@ class _EstadoPantallaInicio extends State<PantallaInicio> {
         backgroundColor: Colors.white,
         indicatorColor: ColoresApp.verdeMenta,
         labelBehavior: NavigationDestinationLabelBehavior.alwaysShow,
-        onDestinationSelected: (indice) {
-          setState(() => _seccion = indice);
-        },
+        onDestinationSelected: _seleccionarSeccion,
         destinations: const [
           NavigationDestination(
             icon: Icon(Icons.home_outlined),
@@ -764,9 +1220,7 @@ class _EstadoPantallaInicio extends State<PantallaInicio> {
               nombre: _nombre,
               foto: _foto,
               guardandoRol: _guardandoRol,
-              alCambiarSeccion: (indice) {
-                setState(() => _seccion = indice);
-              },
+              alCambiarSeccion: _seleccionarSeccion,
               alCambiarRol: _cambiarRol,
               alCambiarUbicacion: _cambiarUbicacion,
             ),

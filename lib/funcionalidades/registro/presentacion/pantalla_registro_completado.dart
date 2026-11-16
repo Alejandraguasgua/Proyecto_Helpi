@@ -7,10 +7,7 @@ import '../../../nucleo/tema/colores_app.dart';
 import '../../inicio/presentacion/pantalla_inicio.dart';
 
 class PantallaRegistroCompletado extends StatefulWidget {
-  const PantallaRegistroCompletado({
-    super.key,
-    required this.perfil,
-  });
+  const PantallaRegistroCompletado({super.key, required this.perfil});
 
   final Map<String, dynamic> perfil;
 
@@ -19,8 +16,7 @@ class PantallaRegistroCompletado extends StatefulWidget {
       _EstadoRegistroCompletado();
 }
 
-class _EstadoRegistroCompletado
-    extends State<PantallaRegistroCompletado> {
+class _EstadoRegistroCompletado extends State<PantallaRegistroCompletado> {
   Timer? _temporizador;
   bool _abriendoInicio = false;
 
@@ -28,10 +24,7 @@ class _EstadoRegistroCompletado
   void initState() {
     super.initState();
 
-    _temporizador = Timer(
-      const Duration(seconds: 2),
-      _abrirInicio,
-    );
+    _temporizador = Timer(const Duration(seconds: 2), _abrirInicio);
   }
 
   void _abrirInicio() {
@@ -42,9 +35,7 @@ class _EstadoRegistroCompletado
 
     Navigator.of(context).pushReplacement(
       MaterialPageRoute<void>(
-        builder: (_) => PantallaInicio(
-          perfil: widget.perfil,
-        ),
+        builder: (_) => PantallaInicio(perfil: widget.perfil),
       ),
     );
   }
@@ -86,9 +77,7 @@ class _EstadoRegistroCompletado
                     Text(
                       '¡Registro completado!',
                       textAlign: TextAlign.center,
-                      style: Theme.of(context)
-                          .textTheme
-                          .headlineLarge,
+                      style: Theme.of(context).textTheme.headlineLarge,
                     ),
 
                     const SizedBox(height: 16),

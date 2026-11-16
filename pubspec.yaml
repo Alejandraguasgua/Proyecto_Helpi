@@ -42,6 +42,8 @@ dependencies:
   google_maps_flutter: ^2.19.0
   cloud_firestore: ^7.1.0
   http: ^1.6.0
+  mapbox_maps_flutter: ^3.0.0
+  flutter_dotenv: ^6.0.0
 
 dev_dependencies:
   flutter_test:
@@ -65,6 +67,7 @@ flutter:
   # the material Icons class.
   uses-material-design: true
   assets:
+  - .env.mapbox
   - assets/imagenes/portada.png
   - assets/imagenes/fondo_acceso.png
   - assets/imagenes/mapa_roles.png
