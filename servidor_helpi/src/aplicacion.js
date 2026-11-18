@@ -10,6 +10,7 @@ const {
   texto,
   categorias,
   tieneAceptacionVigente,
+  estaSuspendido,
 } = require('./dominio');
 
 const integraciones = require('./integraciones');
@@ -121,13 +122,37 @@ function crearAplicacion({ almacen, auth, db }) {
           );
         }
 
-        const perfil = await almacen.get(
+        let perfil = await almacen.get(
           `usuarios/${solicitud.usuario.uid}`,
         );
 
+        // Si una suspensión temporal ya venció, se quita automáticamente.
+        if (perfil?.suspendido === true && !estaSuspendido(perfil)) {
+          try {
+            await servicio.levantarSuspensionVencida(
+              solicitud.usuario.uid,
+            );
+            perfil = {
+              ...perfil,
+              suspendido: false,
+              suspendidoHasta: null,
+              motivoSuspension: null,
+            };
+          } catch (error) {
+            console.error(
+              'No se pudo levantar la suspensión vencida:',
+              error.message,
+            );
+          }
+        }
+
         exigir(
-          !perfil?.suspendido,
-          'La cuenta está suspendida.',
+          !estaSuspendido(perfil),
+          perfil?.suspendidoHasta
+            ? `La cuenta está suspendida hasta el ${new Date(
+                perfil.suspendidoHasta,
+              ).toLocaleString('es-EC', { timeZone: 'America/Guayaquil' })}.`
+            : 'La cuenta está suspendida.',
           403,
         );
 
@@ -217,6 +242,22 @@ function crearAplicacion({ almacen, auth, db }) {
       'Acceso exclusivo de administrador.',
       403,
     );
+
+    return {
+      uid: solicitud.usuario.uid,
+      correo: solicitud.usuario.email ?? null,
+    };
+  }
+
+  async function nombresDeUsuarios(uids) {
+    const unicos = [...new Set(uids.filter(Boolean))];
+    const perfiles = await Promise.all(
+      unicos.map((uid) => almacen.get(`usuarios/${uid}`)),
+    );
+
+    return new Map(
+      unicos.map((uid, i) => [uid, perfiles[i]?.nombre ?? null]),
+    );
   }
 
   function identificador(solicitud) {
@@ -275,7 +316,7 @@ function crearAplicacion({ almacen, auth, db }) {
     const perfil = await almacen.get(`usuarios/${idPerfil}`);
 
     exigir(
-      perfil && !perfil.suspendido,
+      perfil && !estaSuspendido(perfil),
       'El perfil no está disponible.',
       404,
     );
@@ -581,6 +622,7 @@ function crearAplicacion({ almacen, auth, db }) {
       );
 
       const cantidad = (perfil.reportesActivos ?? 0) + 1;
+      const suspenderAhora = cantidad >= 3 && !estaSuspendido(perfil);
 
       transaccion.set(clave, {
         autorUid: uid,
@@ -593,8 +635,15 @@ function crearAplicacion({ almacen, auth, db }) {
       transaccion.set(`usuarios/${destino}`, {
         ...perfil,
         reportesActivos: cantidad,
-        suspendido:
-          cantidad >= 3 || perfil.suspendido === true,
+        ...(suspenderAhora
+          ? {
+              suspendido: true,
+              suspendidoHasta: null,
+              motivoSuspension:
+                'Suspensión automática por acumular 3 reportes.',
+              suspendidoEn: new Date().toISOString(),
+            }
+          : {}),
       });
     });
 
@@ -604,32 +653,155 @@ function crearAplicacion({ almacen, auth, db }) {
   registrarRuta('get', '/admin/reportes', async (solicitud) => {
     verificarAdministrador(solicitud);
 
-    return almacen.list(
+    const estado = ['abierto', 'resuelto', 'descartado'].includes(
+      solicitud.query.estado,
+    )
+      ? solicitud.query.estado
+      : 'abierto';
+
+    const pagina = await almacen.list(
       'reportes',
       'estado',
-      'abierto',
+      estado,
       solicitud.query.cursor,
     );
+
+    const nombres = await nombresDeUsuarios(
+      pagina.datos.flatMap((r) => [r.autorUid, r.destinoUid]),
+    );
+
+    return {
+      ...pagina,
+      datos: pagina.datos.map((r) => ({
+        ...r,
+        autorNombre: nombres.get(r.autorUid) ?? null,
+        destinoNombre: nombres.get(r.destinoUid) ?? null,
+      })),
+    };
   });
+
+  registrarRuta(
+    'patch',
+    '/admin/reportes/:id',
+    async (solicitud) => {
+      const admin = verificarAdministrador(solicitud);
+
+      return servicio.atenderReporteAdmin(
+        admin,
+        identificador(solicitud),
+        solicitud.body,
+      );
+    },
+  );
 
   registrarRuta(
     'patch',
     '/admin/usuarios/:id',
     async (solicitud) => {
-      verificarAdministrador(solicitud);
+      const admin = verificarAdministrador(solicitud);
 
       exigir(
         typeof solicitud.body.suspendido === 'boolean',
         'Indica si la cuenta estará suspendida.',
       );
 
-      await db
-        .doc(`usuarios/${identificador(solicitud)}`)
-        .update({
-          suspendido: solicitud.body.suspendido,
-        });
+      const uid = identificador(solicitud);
 
-      return { correcto: true };
+      // { suspendido: true, dias: 7, motivo: '...' } -> temporal
+      // { suspendido: true } -> indefinida
+      // { suspendido: false } -> reactivar
+      return solicitud.body.suspendido
+        ? servicio.suspenderUsuarioAdmin(admin, uid, solicitud.body)
+        : servicio.reactivarUsuarioAdmin(admin, uid);
+    },
+  );
+
+  registrarRuta(
+    'post',
+    '/admin/usuarios/:id/aviso',
+    async (solicitud) => {
+      const admin = verificarAdministrador(solicitud);
+
+      return servicio.enviarAvisoAdmin(
+        admin,
+        identificador(solicitud),
+        solicitud.body,
+      );
+    },
+  );
+
+  registrarRuta(
+    'patch',
+    '/admin/usuarios/:id/administrador',
+    async (solicitud) => {
+      const admin = verificarAdministrador(solicitud);
+      const uid = identificador(solicitud);
+      const darPermiso = solicitud.body.admin;
+
+      exigir(
+        typeof darPermiso === 'boolean',
+        'Indica si tendrá permiso de administrador.',
+      );
+
+      exigir(
+        darPermiso || uid !== admin.uid,
+        'No puedes quitarte tu propio permiso de administrador.',
+        409,
+      );
+
+      let usuarioAuth;
+      try {
+        usuarioAuth = await auth.getUser(uid);
+      } catch (error) {
+        throw new ErrorHelpi(404, 'El usuario no existe.');
+      }
+
+      const claims = { ...(usuarioAuth.customClaims || {}) };
+
+      if (darPermiso) {
+        claims.admin = true;
+      } else {
+        delete claims.admin;
+      }
+
+      await auth.setCustomUserClaims(uid, claims);
+
+      // Marca visible en el perfil (el permiso real es la claim del token).
+      const perfil = await almacen.get(`usuarios/${uid}`);
+      if (perfil) {
+        await db.doc(`usuarios/${uid}`).update({ esAdmin: darPermiso });
+      }
+
+      await servicio.registrarAccionAdmin(
+        admin,
+        darPermiso ? 'admin_otorgado' : 'admin_retirado',
+        'usuario',
+        uid,
+        { nombre: perfil?.nombre ?? null },
+      );
+
+      return { correcto: true, admin: darPermiso };
+    },
+  );
+
+  registrarRuta(
+    'get',
+    '/admin/historial',
+    async (solicitud) => {
+      verificarAdministrador(solicitud);
+
+      const instantanea = await db
+        .collection('acciones_admin')
+        .orderBy('creada', 'desc')
+        .limit(100)
+        .get();
+
+      return {
+        datos: instantanea.docs.map((documento) => ({
+          ...documento.data(),
+          id: documento.id,
+        })),
+      };
     },
   );
 
@@ -655,11 +827,11 @@ function crearAplicacion({ almacen, auth, db }) {
     'delete',
     '/admin/solicitudes/:id',
     async (solicitud) => {
-      verificarAdministrador(solicitud);
+      const admin = verificarAdministrador(solicitud);
+      const idSolicitud = identificador(solicitud);
 
-      const referencia = db.doc(
-        `solicitudes/${identificador(solicitud)}`,
-      );
+      const referencia = db.doc(`solicitudes/${idSolicitud}`);
+      let tituloRetirada = null;
 
       await db.runTransaction(async (transaccion) => {
         const documento = await transaccion.get(referencia);
@@ -676,13 +848,38 @@ function crearAplicacion({ almacen, auth, db }) {
           409,
         );
 
+        tituloRetirada = documento.data().titulo ?? null;
+
         transaccion.update(referencia, {
           estado: 'Cancelada',
           retiradaPorAdmin: true,
         });
       });
 
+      await servicio.registrarAccionAdmin(
+        admin,
+        'solicitud_retirada',
+        'solicitud',
+        idSolicitud,
+        { titulo: tituloRetirada },
+      );
+
       return { correcto: true };
+    },
+  );
+
+  // Elimina la solicitud de la base de datos (no la deja como Cancelada).
+  registrarRuta(
+    'delete',
+    '/admin/solicitudes/:id/definitivo',
+    async (solicitud) => {
+      const admin = verificarAdministrador(solicitud);
+
+      return servicio.eliminarSolicitudAdmin(
+        admin,
+        identificador(solicitud),
+        solicitud.body,
+      );
     },
   );
 

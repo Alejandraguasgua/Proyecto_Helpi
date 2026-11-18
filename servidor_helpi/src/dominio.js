@@ -108,6 +108,26 @@ function tieneAceptacionVigente(perfil, uidEsperado = null) {
   );
 }
 
+/**
+ * Indica si una cuenta está suspendida en este momento.
+ * La suspensión puede ser indefinida (sin `suspendidoHasta`) o temporal
+ * (con `suspendidoHasta` en formato ISO); al vencer la fecha deja de contar.
+ */
+function estaSuspendido(perfil, ahora = new Date()) {
+  if (!perfil || perfil.suspendido !== true) return false;
+
+  const hasta = perfil.suspendidoHasta;
+  if (!hasta) return true;
+
+  const fin = new Date(hasta);
+  if (Number.isNaN(fin.getTime())) return true;
+
+  return fin.getTime() > ahora.getTime();
+}
+
+const MILISEGUNDOS_POR_DIA = 24 * 60 * 60 * 1000;
+const ESTADOS_REPORTE_ATENDIDO = new Set(['resuelto', 'descartado']);
+
 function coordenadas(valor) {
   exigir(
     valor &&
@@ -219,7 +239,7 @@ class ServicioHelpi {
     );
 
     exigir(
-      !perfil.suspendido,
+      !estaSuspendido(perfil, this.reloj()),
       'Esta cuenta está suspendida.',
       403,
     );
@@ -249,7 +269,7 @@ class ServicioHelpi {
         (await transaccion.get(`usuarios/${uid}`)) || {};
 
       exigir(
-        !usuarioExistente.suspendido,
+        !estaSuspendido(usuarioExistente, this.reloj()),
         'Esta cuenta está suspendida.',
         403,
       );
@@ -426,7 +446,7 @@ class ServicioHelpi {
         (await transaccion.get(`usuarios/${uid}`)) || {};
 
       exigir(
-        !usuarioExistente.suspendido,
+        !estaSuspendido(usuarioExistente, this.reloj()),
         'Esta cuenta está suspendida.',
         403,
       );
@@ -986,7 +1006,7 @@ class ServicioHelpi {
         );
 
         exigir(
-          contraparte && !contraparte.suspendido,
+          contraparte && !estaSuspendido(contraparte, this.reloj()),
           'El solicitante no está disponible.',
           409,
         );
@@ -1524,7 +1544,7 @@ class ServicioHelpi {
     );
 
     exigir(
-      receptor && !receptor.suspendido,
+      receptor && !estaSuspendido(receptor, this.reloj()),
       'El perfil del prestador no está disponible.',
       404,
     );
@@ -1716,10 +1736,391 @@ class ServicioHelpi {
       mensaje: 'Tu cuenta y tus datos personales fueron eliminados.',
     };
   }
+
+  // ---------------------------------------------------------------------------
+  // Administración
+  // ---------------------------------------------------------------------------
+
+  /** Recorre todas las páginas de una consulta por igualdad. */
+  async listarTodo(coleccion, campo, valor) {
+    const resultados = [];
+    let cursor;
+
+    for (let pagina = 0; pagina < 100; pagina += 1) {
+      const respuesta = await this.almacen.list(
+        coleccion,
+        campo,
+        valor,
+        cursor,
+      );
+
+      resultados.push(...(respuesta.datos || []));
+      cursor = respuesta.siguienteCursor;
+
+      if (!cursor) break;
+    }
+
+    return resultados;
+  }
+
+  /** Guarda en `acciones_admin` quién hizo qué, para el historial. */
+  async registrarAccionAdmin(
+    admin,
+    accion,
+    objetivoTipo,
+    objetivoId,
+    detalle = {},
+  ) {
+    const id = randomUUID();
+
+    await this.almacen.set(`acciones_admin/${id}`, {
+      id,
+      adminUid: admin.uid,
+      adminCorreo: admin.correo ?? null,
+      accion,
+      objetivoTipo,
+      objetivoId,
+      detalle,
+      creada: this.reloj().toISOString(),
+    });
+  }
+
+  /** Crea un aviso del equipo de Helpi en las notificaciones del usuario. */
+  crearAvisoAdmin(uid, titulo, mensaje) {
+    const id = `aviso_admin_${randomUUID()}`;
+
+    return {
+      ruta: `notificaciones/${id}`,
+      datos: {
+        id,
+        uid,
+        destinatarioUid: uid,
+        solicitudId: null,
+        servicioTitulo: null,
+        tipo: 'aviso_admin',
+        titulo,
+        mensaje,
+        leida: false,
+        fechaLectura: null,
+        creada: this.reloj().toISOString(),
+      },
+    };
+  }
+
+  /**
+   * Suspende una cuenta. `dias` entre 1 y 365 = suspensión temporal;
+   * `dias` nulo = suspensión indefinida hasta que un administrador la reactive.
+   */
+  async suspenderUsuarioAdmin(admin, uid, datos = {}) {
+    exigir(
+      uid !== admin.uid,
+      'No puedes suspender tu propia cuenta.',
+      409,
+    );
+
+    const dias = datos.dias ?? null;
+
+    exigir(
+      dias === null ||
+        (Number.isInteger(dias) && dias >= 1 && dias <= 365),
+      'La suspensión temporal debe durar entre 1 y 365 días.',
+    );
+
+    const motivo =
+      datos.motivo == null || String(datos.motivo).trim() === ''
+        ? null
+        : texto(datos.motivo, 'Motivo', 3, 300);
+
+    const ahora = this.reloj();
+    const hasta = dias
+      ? new Date(ahora.getTime() + dias * MILISEGUNDOS_POR_DIA).toISOString()
+      : null;
+
+    const perfil = await this.almacen.atomic(async (transaccion) => {
+      const actual = await transaccion.get(`usuarios/${uid}`);
+
+      exigir(actual, 'El usuario no existe.', 404);
+
+      transaccion.set(`usuarios/${uid}`, {
+        ...actual,
+        suspendido: true,
+        suspendidoHasta: hasta,
+        motivoSuspension: motivo,
+        suspendidoPor: admin.uid,
+        suspendidoEn: ahora.toISOString(),
+      });
+
+      return actual;
+    });
+
+    await this.registrarAccionAdmin(
+      admin,
+      dias ? 'suspension_temporal' : 'suspension_indefinida',
+      'usuario',
+      uid,
+      { nombre: perfil.nombre ?? null, dias, motivo, hasta },
+    );
+
+    return {
+      correcto: true,
+      suspendido: true,
+      suspendidoHasta: hasta,
+      motivoSuspension: motivo,
+    };
+  }
+
+  async reactivarUsuarioAdmin(admin, uid) {
+    const ahoraIso = this.reloj().toISOString();
+
+    const perfil = await this.almacen.atomic(async (transaccion) => {
+      const actual = await transaccion.get(`usuarios/${uid}`);
+
+      exigir(actual, 'El usuario no existe.', 404);
+
+      transaccion.set(`usuarios/${uid}`, {
+        ...actual,
+        suspendido: false,
+        suspendidoHasta: null,
+        motivoSuspension: null,
+        reactivadoPor: admin.uid,
+        reactivadoEn: ahoraIso,
+      });
+
+      return actual;
+    });
+
+    await this.registrarAccionAdmin(admin, 'reactivacion', 'usuario', uid, {
+      nombre: perfil.nombre ?? null,
+    });
+
+    return { correcto: true, suspendido: false };
+  }
+
+  /**
+   * Si la suspensión temporal ya venció, la quita del perfil.
+   * Devuelve true cuando hubo que actualizar el documento.
+   */
+  async levantarSuspensionVencida(uid) {
+    return this.almacen.atomic(async (transaccion) => {
+      const actual = await transaccion.get(`usuarios/${uid}`);
+
+      if (
+        !actual ||
+        actual.suspendido !== true ||
+        estaSuspendido(actual, this.reloj())
+      ) {
+        return false;
+      }
+
+      transaccion.set(`usuarios/${uid}`, {
+        ...actual,
+        suspendido: false,
+        suspendidoHasta: null,
+        motivoSuspension: null,
+      });
+
+      return true;
+    });
+  }
+
+  /** Envía una advertencia o aviso del administrador al usuario. */
+  async enviarAvisoAdmin(admin, uid, datos = {}) {
+    const mensaje = texto(datos.mensaje, 'Mensaje', 5, 500);
+
+    const perfil = await this.almacen.get(`usuarios/${uid}`);
+    exigir(perfil, 'El usuario no existe.', 404);
+
+    const aviso = this.crearAvisoAdmin(
+      uid,
+      'Aviso del equipo de Helpi',
+      mensaje,
+    );
+
+    await this.almacen.set(aviso.ruta, aviso.datos);
+
+    await this.registrarAccionAdmin(admin, 'aviso_enviado', 'usuario', uid, {
+      nombre: perfil.nombre ?? null,
+      mensaje,
+    });
+
+    return { correcto: true };
+  }
+
+  /** Marca un reporte como resuelto o descartado y descuenta el reporte activo. */
+  async atenderReporteAdmin(admin, idReporte, datos = {}) {
+    const estado = datos.estado;
+
+    exigir(
+      ESTADOS_REPORTE_ATENDIDO.has(estado),
+      'El estado del reporte debe ser "resuelto" o "descartado".',
+    );
+
+    const nota =
+      datos.nota == null || String(datos.nota).trim() === ''
+        ? null
+        : texto(datos.nota, 'Nota', 3, 300);
+
+    const ahoraIso = this.reloj().toISOString();
+
+    const reporte = await this.almacen.atomic(async (transaccion) => {
+      const actual = await transaccion.get(`reportes/${idReporte}`);
+
+      exigir(actual, 'El reporte no existe.', 404);
+      exigir(
+        actual.estado === 'abierto',
+        'Este reporte ya fue atendido.',
+        409,
+      );
+
+      const destino = actual.destinoUid
+        ? await transaccion.get(`usuarios/${actual.destinoUid}`)
+        : null;
+
+      transaccion.set(`reportes/${idReporte}`, {
+        ...actual,
+        estado,
+        nota,
+        atendidoPor: admin.uid,
+        atendidoEn: ahoraIso,
+      });
+
+      if (destino) {
+        transaccion.set(`usuarios/${actual.destinoUid}`, {
+          ...destino,
+          reportesActivos: Math.max(0, (destino.reportesActivos ?? 0) - 1),
+        });
+      }
+
+      return actual;
+    });
+
+    await this.registrarAccionAdmin(
+      admin,
+      estado === 'resuelto' ? 'reporte_resuelto' : 'reporte_descartado',
+      'reporte',
+      idReporte,
+      { destinoUid: reporte.destinoUid ?? null, motivo: reporte.motivo, nota },
+    );
+
+    return { correcto: true, estado };
+  }
+
+  /**
+   * Elimina una solicitud de la base de datos por completo, junto con sus
+   * calificaciones (descontándolas del promedio del usuario calificado),
+   * sus notificaciones y sus registros de idempotencia.
+   */
+  async eliminarSolicitudAdmin(admin, identificador, datos = {}) {
+    const solicitud = await this.almacen.get(`solicitudes/${identificador}`);
+
+    exigir(solicitud, 'La solicitud no existe.', 404);
+    exigir(
+      !solicitud.pagoId,
+      'Resuelve el pago antes de eliminar la solicitud.',
+      409,
+    );
+
+    const motivo =
+      datos.motivo == null || String(datos.motivo).trim() === ''
+        ? null
+        : texto(datos.motivo, 'Motivo', 3, 300);
+
+    // 1. Calificaciones: se descuentan del promedio del usuario calificado.
+    const calificaciones = await this.listarTodo(
+      'calificaciones',
+      'solicitudId',
+      identificador,
+    );
+
+    for (const calificacion of calificaciones) {
+      const idCalificacion = calificacion.id;
+      if (!idCalificacion) continue;
+
+      await this.almacen.atomic(async (transaccion) => {
+        const actual = await transaccion.get(
+          `calificaciones/${idCalificacion}`,
+        );
+        if (!actual) return;
+
+        const receptor = actual.destinoUid
+          ? await transaccion.get(`usuarios/${actual.destinoUid}`)
+          : null;
+
+        if (receptor) {
+          const total = Math.max(0, (receptor.totalCalificaciones ?? 0) - 1);
+          const suma = Math.max(
+            0,
+            (receptor.sumaCalificaciones ?? 0) - (Number(actual.estrellas) || 0),
+          );
+
+          transaccion.set(`usuarios/${actual.destinoUid}`, {
+            ...receptor,
+            totalCalificaciones: total,
+            sumaCalificaciones: suma,
+            promedio: total > 0 ? Number((suma / total).toFixed(2)) : null,
+          });
+        }
+
+        transaccion.delete(`calificaciones/${idCalificacion}`);
+      });
+    }
+
+    // 2. Notificaciones y registros de idempotencia de la solicitud.
+    for (const coleccion of ['notificaciones', 'idempotencia_solicitudes']) {
+      const documentos = await this.listarTodo(
+        coleccion,
+        'solicitudId',
+        identificador,
+      );
+
+      for (const documento of documentos) {
+        if (documento.id) {
+          await this.almacen.delete(`${coleccion}/${documento.id}`);
+        }
+      }
+    }
+
+    // 3. La solicitud.
+    await this.almacen.delete(`solicitudes/${identificador}`);
+
+    // 4. Avisa a los participantes que la solicitud ya no existe.
+    const titulo = solicitud.titulo || 'una solicitud';
+    const participantes = [
+      ...new Set(
+        [solicitud.solicitanteUid, solicitud.prestadorUid].filter(Boolean),
+      ),
+    ];
+
+    for (const uid of participantes) {
+      const aviso = this.crearAvisoAdmin(
+        uid,
+        'Solicitud eliminada',
+        `Un administrador eliminó "${titulo}".` +
+          (motivo ? ` Motivo: ${motivo}` : ''),
+      );
+      await this.almacen.set(aviso.ruta, aviso.datos);
+    }
+
+    await this.registrarAccionAdmin(
+      admin,
+      'solicitud_eliminada',
+      'solicitud',
+      identificador,
+      {
+        titulo: solicitud.titulo ?? null,
+        estado: solicitud.estado ?? null,
+        motivo,
+        calificacionesEliminadas: calificaciones.length,
+      },
+    );
+
+    return { correcto: true };
+  }
 }
 
 module.exports = {
   ServicioHelpi,
+  estaSuspendido,
   ErrorHelpi,
   exigir,
   texto,

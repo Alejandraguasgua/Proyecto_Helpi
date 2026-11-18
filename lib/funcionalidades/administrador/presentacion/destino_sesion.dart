@@ -7,6 +7,7 @@ import '../../inicio/presentacion/pantalla_inicio.dart';
 import '../../registro/datos/repositorio_perfil.dart';
 import '../../registro/presentacion/pantalla_roles.dart';
 import '../../terminos/presentacion/pantalla_terminos.dart';
+import '../datos/repositorio_admin.dart';
 
 /// Decide a qué pantalla va el usuario autenticado:
 /// bienvenida, registro pendiente, cuenta suspendida,
@@ -21,7 +22,13 @@ Future<Widget> destinoTrasSesion({User? usuario}) async {
   final perfil = await RepositorioPerfil().leer();
 
   if (perfil == null) return const PantallaRoles();
-  if (perfil['suspendido'] == true) return const PantallaSuspendida();
+  // Una suspensión temporal vencida ya no bloquea (el servidor la limpia).
+  if (RepositorioAdmin.estaSuspendido(perfil)) {
+    return PantallaSuspendida(
+      hasta: RepositorioAdmin.suspendidoHasta(perfil),
+      motivo: perfil['motivoSuspension']?.toString(),
+    );
+  }
   if (!RepositorioPerfil.tieneAceptacionVigente(
     perfil,
     uidAutenticado: usuarioActual.uid,
@@ -33,7 +40,18 @@ Future<Widget> destinoTrasSesion({User? usuario}) async {
 }
 
 class PantallaSuspendida extends StatelessWidget {
-  const PantallaSuspendida({super.key});
+  const PantallaSuspendida({super.key, this.hasta, this.motivo});
+
+  /// Fin de la suspensión temporal; null = indefinida.
+  final DateTime? hasta;
+  final String? motivo;
+
+  String _fecha(DateTime fecha) {
+    final local = fecha.toLocal();
+    String dos(int n) => n.toString().padLeft(2, '0');
+    return '${dos(local.day)}/${dos(local.month)}/${local.year} '
+        'a las ${dos(local.hour)}:${dos(local.minute)}';
+  }
 
   Future<void> _salir(BuildContext context) async {
     await FirebaseAuth.instance.signOut();
@@ -64,6 +82,18 @@ class PantallaSuspendida extends StatelessWidget {
                   color: ColoresApp.azulMarino,
                 ),
               ),
+              const SizedBox(height: 8),
+              Text(
+                hasta == null
+                    ? 'La suspensión no tiene fecha de fin.'
+                    : 'Podrás volver a usar Helpi el ${_fecha(hasta!)}.',
+                textAlign: TextAlign.center,
+                style: const TextStyle(fontWeight: FontWeight.w600),
+              ),
+              if (motivo != null && motivo!.trim().isNotEmpty) ...[
+                const SizedBox(height: 8),
+                Text('Motivo: ${motivo!.trim()}', textAlign: TextAlign.center),
+              ],
               const SizedBox(height: 8),
               const Text(
                 'Contacta al equipo de Helpi si crees que es un error.',

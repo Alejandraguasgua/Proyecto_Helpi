@@ -111,6 +111,8 @@ class _EstadoVistaNotificaciones extends State<VistaNotificaciones> {
         return Icons.verified_outlined;
       case 'servicio_cancelado':
         return Icons.cancel_outlined;
+      case 'aviso_admin':
+        return Icons.campaign_outlined;
       default:
         return Icons.notifications_outlined;
     }
@@ -141,6 +143,36 @@ class _EstadoVistaNotificaciones extends State<VistaNotificaciones> {
 
     final idNotificacion = (item['id'] ?? '').toString().trim();
     final solicitudId = (item['solicitudId'] ?? '').toString().trim();
+
+    // Avisos del administrador: se muestran y se marcan como leídos.
+    if (item['tipo']?.toString() == 'aviso_admin') {
+      informacion(
+        context,
+        _tituloFallback(item),
+        (item['mensaje'] ?? '').toString(),
+      );
+
+      if (item['leida'] != true && idNotificacion.isNotEmpty) {
+        try {
+          await _repositorio.marcarLeida(idNotificacion);
+          if (!mounted) return;
+          setState(() {
+            final indice = _notificaciones.indexWhere(
+              (elemento) => elemento['id']?.toString() == idNotificacion,
+            );
+            if (indice != -1) {
+              _notificaciones[indice] = {
+                ..._notificaciones[indice],
+                'leida': true,
+              };
+            }
+          });
+        } catch (_) {
+          // Si falla, el aviso seguirá como no leído; no es crítico.
+        }
+      }
+      return;
+    }
 
     if (solicitudId.isEmpty) {
       aviso(

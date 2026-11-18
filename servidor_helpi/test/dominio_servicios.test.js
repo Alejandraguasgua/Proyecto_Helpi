@@ -3,7 +3,11 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
-const { ServicioHelpi, ErrorHelpi } = require('../src/dominio');
+const {
+  ServicioHelpi,
+  ErrorHelpi,
+  estaSuspendido,
+} = require('../src/dominio');
 
 class AlmacenEnMemoria {
   constructor() {
@@ -31,7 +35,11 @@ class AlmacenEnMemoria {
     const resultados = [];
     for (const [ruta, doc] of this.datos.entries()) {
       if (ruta.startsWith(`${coleccion}/`) && doc[campo] === valor) {
-        resultados.push(JSON.parse(JSON.stringify(doc)));
+        // Igual que Firestore: cada resultado incluye el id del documento.
+        resultados.push({
+          ...JSON.parse(JSON.stringify(doc)),
+          id: doc.id ?? ruta.slice(coleccion.length + 1),
+        });
       }
     }
     return { datos: resultados, siguienteCursor: null };
@@ -93,6 +101,9 @@ class AlmacenEnMemoria {
           throw new Error(`Fallo simulado en transacción al escribir ${ruta}`);
         }
         instantanea.set(ruta, JSON.parse(JSON.stringify(valor)));
+      },
+      delete: (ruta) => {
+        instantanea.delete(ruta);
       },
     });
 
@@ -1903,3 +1914,267 @@ test('Módulo 4: edición de perfil sin pérdida de términos, calificaciones co
 
 
 
+
+
+// -----------------------------------------------------------------------------
+// Administración
+// -----------------------------------------------------------------------------
+
+function escenarioAdmin() {
+  const almacen = new AlmacenEnMemoria();
+  let ahora = new Date('2026-11-18T12:00:00.000Z');
+  const servicio = new ServicioHelpi(almacen, () => ahora);
+  const admin = { uid: 'admin_1', correo: 'admin@helpi.ec' };
+
+  almacen.datos.set('usuarios/usuario_1', {
+    nombre: 'Ana Pérez',
+    rol: 'solicitante',
+    suspendido: false,
+  });
+  almacen.datos.set('usuarios/prestador_1', {
+    nombre: 'Luis Gómez',
+    rol: 'prestador',
+    totalCalificaciones: 2,
+    sumaCalificaciones: 9,
+    promedio: 4.5,
+    reportesActivos: 2,
+  });
+
+  return {
+    almacen,
+    servicio,
+    admin,
+    avanzar: (dias) => {
+      ahora = new Date(ahora.getTime() + dias * 24 * 60 * 60 * 1000);
+    },
+  };
+}
+
+function documentosDe(almacen, coleccion) {
+  return [...almacen.datos.entries()]
+    .filter(([ruta]) => ruta.startsWith(`${coleccion}/`))
+    .map(([, doc]) => doc);
+}
+
+test('Admin: suspensión temporal vence sola y se puede levantar', async () => {
+  const { almacen, servicio, admin, avanzar } = escenarioAdmin();
+
+  const resultado = await servicio.suspenderUsuarioAdmin(admin, 'usuario_1', {
+    dias: 3,
+    motivo: 'Lenguaje ofensivo',
+  });
+
+  assert.equal(resultado.suspendidoHasta, '2026-11-21T12:00:00.000Z');
+
+  const perfil = await almacen.get('usuarios/usuario_1');
+  assert.equal(perfil.suspendido, true);
+  assert.equal(perfil.motivoSuspension, 'Lenguaje ofensivo');
+  assert.equal(perfil.nombre, 'Ana Pérez');
+  assert.equal(estaSuspendido(perfil, new Date('2026-11-20T12:00:00Z')), true);
+  assert.equal(estaSuspendido(perfil, new Date('2026-11-22T12:00:00Z')), false);
+
+  // Antes de vencer no se levanta.
+  assert.equal(await servicio.levantarSuspensionVencida('usuario_1'), false);
+
+  avanzar(4);
+  assert.equal(await servicio.levantarSuspensionVencida('usuario_1'), true);
+
+  const levantado = await almacen.get('usuarios/usuario_1');
+  assert.equal(levantado.suspendido, false);
+  assert.equal(levantado.suspendidoHasta, null);
+
+  const historial = documentosDe(almacen, 'acciones_admin');
+  assert.equal(historial.length, 1);
+  assert.equal(historial[0].accion, 'suspension_temporal');
+  assert.equal(historial[0].detalle.dias, 3);
+});
+
+test('Admin: suspensión indefinida, validaciones y reactivación', async () => {
+  const { almacen, servicio, admin } = escenarioAdmin();
+
+  await assert.rejects(
+    servicio.suspenderUsuarioAdmin(admin, admin.uid, {}),
+    (e) => e instanceof ErrorHelpi && e.estado === 409,
+  );
+  await assert.rejects(
+    servicio.suspenderUsuarioAdmin(admin, 'usuario_1', { dias: 0 }),
+    (e) => e instanceof ErrorHelpi && e.estado === 400,
+  );
+  await assert.rejects(
+    servicio.suspenderUsuarioAdmin(admin, 'no_existe', {}),
+    (e) => e instanceof ErrorHelpi && e.estado === 404,
+  );
+
+  await servicio.suspenderUsuarioAdmin(admin, 'usuario_1', {});
+  const suspendido = await almacen.get('usuarios/usuario_1');
+  assert.equal(suspendido.suspendidoHasta, null);
+  assert.equal(estaSuspendido(suspendido, new Date('2030-01-01')), true);
+
+  await servicio.reactivarUsuarioAdmin(admin, 'usuario_1');
+  const reactivado = await almacen.get('usuarios/usuario_1');
+  assert.equal(reactivado.suspendido, false);
+  assert.equal(estaSuspendido(reactivado), false);
+});
+
+test('Admin: eliminar solicitud la borra con sus calificaciones y avisos', async () => {
+  const { almacen, servicio, admin } = escenarioAdmin();
+
+  almacen.datos.set('solicitudes/sol_1', {
+    id: 'sol_1',
+    titulo: 'Arreglar puerta',
+    estado: 'Completada',
+    solicitanteUid: 'usuario_1',
+    prestadorUid: 'prestador_1',
+  });
+  almacen.datos.set('calificaciones/sol_1_usuario_1', {
+    id: 'sol_1_usuario_1',
+    solicitudId: 'sol_1',
+    autorUid: 'usuario_1',
+    destinoUid: 'prestador_1',
+    estrellas: 5,
+  });
+  almacen.datos.set('notificaciones/notif_sol_1_a', {
+    id: 'notif_sol_1_a',
+    uid: 'usuario_1',
+    solicitudId: 'sol_1',
+  });
+  almacen.datos.set('notificaciones/otra', {
+    id: 'otra',
+    uid: 'usuario_1',
+    solicitudId: 'sol_2',
+  });
+  almacen.datos.set('idempotencia_solicitudes/usuario_1_crear_x', {
+    uid: 'usuario_1',
+    solicitudId: 'sol_1',
+  });
+
+  await servicio.eliminarSolicitudAdmin(admin, 'sol_1', {
+    motivo: 'Contenido falso',
+  });
+
+  assert.equal(await almacen.get('solicitudes/sol_1'), null);
+  assert.equal(await almacen.get('calificaciones/sol_1_usuario_1'), null);
+  assert.equal(await almacen.get('notificaciones/notif_sol_1_a'), null);
+  assert.equal(
+    await almacen.get('idempotencia_solicitudes/usuario_1_crear_x'),
+    null,
+  );
+  assert.ok(await almacen.get('notificaciones/otra'));
+
+  // El promedio del prestador se recalcula sin esa calificación (9-5)/1.
+  const prestador = await almacen.get('usuarios/prestador_1');
+  assert.equal(prestador.totalCalificaciones, 1);
+  assert.equal(prestador.sumaCalificaciones, 4);
+  assert.equal(prestador.promedio, 4);
+
+  // Ambos participantes reciben un aviso sin solicitud vinculada.
+  const avisos = documentosDe(almacen, 'notificaciones').filter(
+    (n) => n.tipo === 'aviso_admin',
+  );
+  assert.deepEqual(avisos.map((a) => a.uid).sort(), [
+    'prestador_1',
+    'usuario_1',
+  ]);
+  assert.ok(avisos.every((a) => a.solicitudId === null));
+  assert.match(avisos[0].mensaje, /Contenido falso/);
+
+  const historial = documentosDe(almacen, 'acciones_admin');
+  assert.equal(historial[0].accion, 'solicitud_eliminada');
+
+  await assert.rejects(
+    servicio.eliminarSolicitudAdmin(admin, 'sol_1'),
+    (e) => e instanceof ErrorHelpi && e.estado === 404,
+  );
+});
+
+test('Admin: no elimina solicitudes con pago pendiente', async () => {
+  const { almacen, servicio, admin } = escenarioAdmin();
+
+  almacen.datos.set('solicitudes/sol_pago', {
+    id: 'sol_pago',
+    estado: 'En Proceso',
+    pagoId: 'pago_1',
+  });
+
+  await assert.rejects(
+    servicio.eliminarSolicitudAdmin(admin, 'sol_pago'),
+    (e) => e instanceof ErrorHelpi && e.estado === 409,
+  );
+  assert.ok(await almacen.get('solicitudes/sol_pago'));
+});
+
+test('Admin: atender reporte descuenta reportes activos una sola vez', async () => {
+  const { almacen, servicio, admin } = escenarioAdmin();
+
+  almacen.datos.set('reportes/usuario_1_prestador_1', {
+    autorUid: 'usuario_1',
+    destinoUid: 'prestador_1',
+    motivo: 'No llegó',
+    estado: 'abierto',
+  });
+
+  await assert.rejects(
+    servicio.atenderReporteAdmin(admin, 'usuario_1_prestador_1', {
+      estado: 'cerrado',
+    }),
+    (e) => e instanceof ErrorHelpi && e.estado === 400,
+  );
+
+  await servicio.atenderReporteAdmin(admin, 'usuario_1_prestador_1', {
+    estado: 'resuelto',
+    nota: 'Se habló con el prestador',
+  });
+
+  const reporte = await almacen.get('reportes/usuario_1_prestador_1');
+  assert.equal(reporte.estado, 'resuelto');
+  assert.equal(reporte.atendidoPor, admin.uid);
+  assert.equal(
+    (await almacen.get('usuarios/prestador_1')).reportesActivos,
+    1,
+  );
+
+  await assert.rejects(
+    servicio.atenderReporteAdmin(admin, 'usuario_1_prestador_1', {
+      estado: 'descartado',
+    }),
+    (e) => e instanceof ErrorHelpi && e.estado === 409,
+  );
+});
+
+test('Admin: enviar aviso crea una notificación para el usuario', async () => {
+  const { almacen, servicio, admin } = escenarioAdmin();
+
+  await assert.rejects(
+    servicio.enviarAvisoAdmin(admin, 'usuario_1', { mensaje: 'Hey' }),
+    (e) => e instanceof ErrorHelpi && e.estado === 400,
+  );
+
+  await servicio.enviarAvisoAdmin(admin, 'usuario_1', {
+    mensaje: 'Recuerda respetar las normas de la comunidad.',
+  });
+
+  const avisos = documentosDe(almacen, 'notificaciones');
+  assert.equal(avisos.length, 1);
+  assert.equal(avisos[0].uid, 'usuario_1');
+  assert.equal(avisos[0].tipo, 'aviso_admin');
+  assert.equal(avisos[0].leida, false);
+});
+
+test('Una suspensión temporal vencida ya no bloquea al usuario', async () => {
+  const { almacen, servicio } = escenarioAdmin();
+  const vencido = {
+    suspendido: true,
+    suspendidoHasta: '2026-11-17T00:00:00.000Z',
+  };
+
+  assert.equal(estaSuspendido(vencido, new Date('2026-11-18')), false);
+  assert.equal(estaSuspendido({ suspendido: true }), true);
+  assert.equal(estaSuspendido({ suspendido: false }), false);
+  assert.equal(estaSuspendido(null), false);
+
+  almacen.datos.set('usuarios/usuario_1', {
+    ...(await almacen.get('usuarios/usuario_1')),
+    ...vencido,
+  });
+  assert.equal(await servicio.levantarSuspensionVencida('usuario_1'), true);
+});
