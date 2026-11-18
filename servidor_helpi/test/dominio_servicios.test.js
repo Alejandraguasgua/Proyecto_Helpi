@@ -2178,3 +2178,48 @@ test('Una suspensión temporal vencida ya no bloquea al usuario', async () => {
   });
   assert.equal(await servicio.levantarSuspensionVencida('usuario_1'), true);
 });
+
+
+test('Admin: alerta con título y lista de alertas pendientes del usuario', async () => {
+  const { almacen, servicio, admin } = escenarioAdmin();
+
+  await servicio.enviarAvisoAdmin(admin, 'usuario_1', {
+    titulo: 'Lenguaje inapropiado',
+    mensaje: 'Mantén un trato respetuoso con la comunidad.',
+  });
+  await servicio.enviarAvisoAdmin(admin, 'usuario_1', {
+    mensaje: 'Completa tu perfil para recibir más solicitudes.',
+  });
+  // Notificación normal y alerta de otro usuario: no deben aparecer.
+  almacen.datos.set('notificaciones/normal', {
+    id: 'normal',
+    uid: 'usuario_1',
+    tipo: 'servicio_aceptado',
+    leida: false,
+  });
+  await servicio.enviarAvisoAdmin(admin, 'prestador_1', {
+    mensaje: 'Este aviso es para otra persona.',
+  });
+
+  const { datos } = await servicio.avisosAdminPendientes('usuario_1');
+  assert.equal(datos.length, 2);
+  assert.ok(datos.every((n) => n.tipo === 'aviso_admin' && n.uid === 'usuario_1'));
+  assert.deepEqual(
+    datos.map((n) => n.titulo).sort(),
+    ['Aviso del equipo de Helpi', 'Lenguaje inapropiado'],
+  );
+
+  // Una vez leída, ya no vuelve a salir.
+  const ruta = `notificaciones/${datos[0].id}`;
+  almacen.datos.set(ruta, { ...(await almacen.get(ruta)), leida: true });
+  const despues = await servicio.avisosAdminPendientes('usuario_1');
+  assert.equal(despues.datos.length, 1);
+
+  await assert.rejects(
+    servicio.enviarAvisoAdmin(admin, 'usuario_1', {
+      titulo: 'x',
+      mensaje: 'Mensaje válido de prueba.',
+    }),
+    (e) => e instanceof ErrorHelpi && e.estado === 400,
+  );
+});

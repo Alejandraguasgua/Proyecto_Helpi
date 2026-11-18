@@ -1923,27 +1923,47 @@ class ServicioHelpi {
     });
   }
 
-  /** Envía una advertencia o aviso del administrador al usuario. */
+  /**
+   * Envía una alerta del administrador al usuario. `titulo` es opcional
+   * (por ejemplo, el nombre de la alerta elegida en la lista del panel).
+   */
   async enviarAvisoAdmin(admin, uid, datos = {}) {
     const mensaje = texto(datos.mensaje, 'Mensaje', 5, 500);
+    const titulo =
+      datos.titulo == null || String(datos.titulo).trim() === ''
+        ? 'Aviso del equipo de Helpi'
+        : texto(datos.titulo, 'Título', 3, 80);
 
     const perfil = await this.almacen.get(`usuarios/${uid}`);
     exigir(perfil, 'El usuario no existe.', 404);
 
-    const aviso = this.crearAvisoAdmin(
-      uid,
-      'Aviso del equipo de Helpi',
-      mensaje,
-    );
+    const aviso = this.crearAvisoAdmin(uid, titulo, mensaje);
 
     await this.almacen.set(aviso.ruta, aviso.datos);
 
     await this.registrarAccionAdmin(admin, 'aviso_enviado', 'usuario', uid, {
       nombre: perfil.nombre ?? null,
+      titulo,
       mensaje,
     });
 
     return { correcto: true };
+  }
+
+  /**
+   * Alertas del administrador que el usuario todavía no ha leído,
+   * de la más antigua a la más reciente. La app las muestra en una
+   * ventana flotante al abrirse.
+   */
+  async avisosAdminPendientes(uid) {
+    const notificaciones = await this.listarTodo('notificaciones', 'uid', uid);
+
+    const datos = notificaciones
+      .filter((n) => n.tipo === 'aviso_admin' && n.leida !== true)
+      .sort((a, b) => String(a.creada || '').localeCompare(String(b.creada || '')))
+      .slice(0, 20);
+
+    return { datos };
   }
 
   /** Marca un reporte como resuelto o descartado y descuenta el reporte activo. */

@@ -70,12 +70,16 @@ class RepositorioAdmin {
     );
   }
 
-  /// Envía una advertencia que le llega al usuario en Notificaciones.
-  Future<void> enviarAviso(String uid, String mensaje) async {
+  /// Envía una alerta: le llega en Notificaciones y le aparece en una
+  /// ventana flotante la próxima vez que abra la app.
+  Future<void> enviarAviso(String uid, String mensaje, {String? titulo}) async {
     await _api.enviar(
       'POST',
       '/admin/usuarios/${Uri.encodeComponent(uid)}/aviso',
-      datos: {'mensaje': mensaje.trim()},
+      datos: {
+        'mensaje': mensaje.trim(),
+        if (titulo != null && titulo.trim().isNotEmpty) 'titulo': titulo.trim(),
+      },
     );
   }
 

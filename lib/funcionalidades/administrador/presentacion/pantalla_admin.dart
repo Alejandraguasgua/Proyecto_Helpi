@@ -299,6 +299,195 @@ Future<String?> _pedirTexto(
   );
 }
 
+/// Alertas predefinidas que el administrador puede enviar.
+class _PlantillaAlerta {
+  const _PlantillaAlerta(this.titulo, this.mensaje, this.icono);
+
+  final String titulo;
+  final String mensaje;
+  final IconData icono;
+}
+
+const _plantillasAlerta = [
+  _PlantillaAlerta(
+    'Lenguaje inapropiado',
+    'Recibimos reportes de mensajes ofensivos o irrespetuosos de tu parte. '
+        'Mantén un trato respetuoso con todos los usuarios; si se repite, '
+        'tu cuenta podría ser suspendida.',
+    Icons.record_voice_over_outlined,
+  ),
+  _PlantillaAlerta(
+    'Servicio no cumplido',
+    'Se reportó que no cumpliste con un servicio que habías aceptado. '
+        'Recuerda cumplir lo acordado o cancelar con anticipación.',
+    Icons.event_busy_outlined,
+  ),
+  _PlantillaAlerta(
+    'Impuntualidad',
+    'Recibimos quejas por llegar tarde a los servicios. Avisa a la otra '
+        'persona si vas a retrasarte y respeta los horarios acordados.',
+    Icons.schedule_outlined,
+  ),
+  _PlantillaAlerta(
+    'Cancelaciones frecuentes',
+    'Has cancelado varios servicios en poco tiempo. Las cancelaciones '
+        'constantes afectan a la comunidad; acepta solo lo que puedas cumplir.',
+    Icons.cancel_outlined,
+  ),
+  _PlantillaAlerta(
+    'Cobro distinto al acordado',
+    'Se reportó que cobraste un precio diferente al acordado en Helpi. '
+        'Respeta el monto pactado en la solicitud.',
+    Icons.payments_outlined,
+  ),
+  _PlantillaAlerta(
+    'Publicación inapropiada',
+    'Una de tus solicitudes o publicaciones no cumple las normas de Helpi. '
+        'Revisa los Términos y Condiciones antes de publicar de nuevo.',
+    Icons.report_outlined,
+  ),
+  _PlantillaAlerta(
+    'Información falsa en el perfil',
+    'Detectamos datos que no parecen reales en tu perfil. Actualiza tu '
+        'información con datos verdaderos para seguir usando Helpi.',
+    Icons.badge_outlined,
+  ),
+  _PlantillaAlerta(
+    'Completa tu perfil',
+    'Tu perfil está incompleto. Agrega tu foto, teléfono y una breve '
+        'presentación para generar más confianza en la comunidad.',
+    Icons.person_outline,
+  ),
+  _PlantillaAlerta(
+    'Último aviso',
+    'Este es el último aviso. Si vuelves a incumplir las normas de Helpi, '
+        'tu cuenta será suspendida.',
+    Icons.warning_amber_rounded,
+  ),
+];
+
+class _ResultadoAlerta {
+  const _ResultadoAlerta(this.titulo, this.mensaje);
+
+  final String titulo;
+  final String mensaje;
+}
+
+/// Lista desplegable de alertas para elegir; el texto se puede ajustar
+/// antes de enviar, o escribir una alerta personalizada.
+Future<_ResultadoAlerta?> _pedirAlerta(BuildContext context, String nombre) {
+  final controlador = TextEditingController();
+  int? seleccion; // índice en _plantillasAlerta; -1 = personalizada
+
+  return showDialog<_ResultadoAlerta>(
+    context: context,
+    builder: (dialogo) => StatefulBuilder(
+      builder: (dialogo, actualizar) {
+        void elegir(int indice) {
+          actualizar(() {
+            seleccion = indice;
+            controlador.text =
+                indice >= 0 ? _plantillasAlerta[indice].mensaje : '';
+          });
+        }
+
+        final personalizada = seleccion == -1;
+        final titulo = seleccion == null
+            ? ''
+            : personalizada
+            ? 'Aviso del equipo de Helpi'
+            : _plantillasAlerta[seleccion!].titulo;
+        final valido =
+            seleccion != null && controlador.text.trim().length >= 5;
+
+        Widget opcion(int indice, String texto, IconData icono) {
+          final elegida = seleccion == indice;
+
+          return ListTile(
+            dense: true,
+            selected: elegida,
+            selectedColor: ColoresApp.verdeAzulado,
+            selectedTileColor: ColoresApp.verdeMenta,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(12),
+            ),
+            leading: Icon(icono),
+            title: Text(
+              texto,
+              style: TextStyle(
+                fontWeight: elegida ? FontWeight.w700 : FontWeight.w500,
+              ),
+            ),
+            trailing: elegida ? const Icon(Icons.check_circle) : null,
+            onTap: () => elegir(indice),
+          );
+        }
+
+        return AlertDialog(
+          title: Text('Enviar alerta a $nombre'),
+          content: SizedBox(
+            width: 460,
+            child: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text(
+                    'Elige la alerta. Al usuario le aparecerá en una ventana '
+                    'al abrir la app y quedará en sus Notificaciones.',
+                    style: TextStyle(fontSize: 13),
+                  ),
+                  const SizedBox(height: 12),
+                  for (var i = 0; i < _plantillasAlerta.length; i++)
+                    opcion(
+                      i,
+                      _plantillasAlerta[i].titulo,
+                      _plantillasAlerta[i].icono,
+                    ),
+                  opcion(-1, 'Escribir alerta personalizada', Icons.edit_outlined),
+                  if (seleccion != null) ...[
+                    const SizedBox(height: 12),
+                    TextField(
+                      controller: controlador,
+                      autofocus: personalizada,
+                      maxLength: 500,
+                      minLines: 3,
+                      maxLines: 6,
+                      decoration: InputDecoration(
+                        labelText: personalizada
+                            ? 'Escribe la alerta'
+                            : 'Mensaje (puedes ajustarlo)',
+                        helperText: 'Título: $titulo',
+                      ),
+                      onChanged: (_) => actualizar(() {}),
+                    ),
+                  ],
+                ],
+              ),
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(dialogo),
+              child: const Text('Volver'),
+            ),
+            FilledButton.icon(
+              onPressed: valido
+                  ? () => Navigator.pop(
+                      dialogo,
+                      _ResultadoAlerta(titulo, controlador.text.trim()),
+                    )
+                  : null,
+              icon: const Icon(Icons.send),
+              label: const Text('Enviar alerta'),
+            ),
+          ],
+        );
+      },
+    ),
+  );
+}
+
 class _OpcionSuspension {
   const _OpcionSuspension(this.etiqueta, this.dias);
 
@@ -451,21 +640,13 @@ class _AccionesUsuario {
   }
 
   Future<bool> advertir(BuildContext context, String uid, String nombre) async {
-    final mensaje = await _pedirTexto(
-      context,
-      titulo: 'Enviar advertencia a $nombre',
-      descripcion: 'Le llegará en Notificaciones como "Aviso del equipo de Helpi".',
-      etiqueta: 'Mensaje',
-      accion: 'Enviar',
-      obligatorio: true,
-      minimo: 5,
-    );
-    if (mensaje == null || !context.mounted) return false;
+    final alerta = await _pedirAlerta(context, nombre);
+    if (alerta == null || !context.mounted) return false;
 
     return _ejecutar(
       context,
-      () => repo.enviarAviso(uid, mensaje),
-      'Aviso enviado a $nombre.',
+      () => repo.enviarAviso(uid, alerta.mensaje, titulo: alerta.titulo),
+      'Alerta "${alerta.titulo}" enviada a $nombre.',
     );
   }
 
@@ -977,7 +1158,7 @@ class _DetalleUsuario extends StatelessWidget {
                   (c) => acciones.advertir(c, uid, nombre),
                 ),
                 icon: const Icon(Icons.campaign_outlined),
-                label: const Text('Enviar advertencia'),
+                label: const Text('Enviar alerta'),
               ),
               const SizedBox(height: 10),
               OutlinedButton.icon(
@@ -1554,7 +1735,7 @@ class _EstadoHistorial extends State<_Historial> {
       case 'reactivacion':
         return 'Reactivó a $nombre';
       case 'aviso_enviado':
-        return 'Envió un aviso a $nombre: "${detalle['mensaje'] ?? ''}"';
+        return 'Envió la alerta "${detalle['titulo'] ?? 'Aviso'}" a $nombre';
       case 'admin_otorgado':
         return 'Dio permiso de administrador a $nombre';
       case 'admin_retirado':

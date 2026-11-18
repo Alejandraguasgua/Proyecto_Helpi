@@ -500,6 +500,11 @@ function crearAplicacion({ almacen, auth, db }) {
     ),
   );
 
+  // Alertas del administrador sin leer (ventana flotante al abrir la app).
+  registrarRuta('get', '/notificaciones/avisos-pendientes', (solicitud) =>
+    servicio.avisosAdminPendientes(solicitud.usuario.uid),
+  );
+
   registrarRuta(
     'patch',
     '/notificaciones/:id',

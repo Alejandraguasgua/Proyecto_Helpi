@@ -38,6 +38,22 @@ class RepositorioNotificaciones {
     return PaginaNotificaciones(datos, respuesta['siguienteCursor'] as String?);
   }
 
+  /// Alertas del administrador que el usuario aún no ha visto.
+  Future<List<Map<String, dynamic>>> avisosPendientes() async {
+    final respuesta = await _api.enviar(
+      'GET',
+      '/notificaciones/avisos-pendientes',
+    );
+
+    final elementos = respuesta['datos'];
+    if (elementos is! List) return [];
+
+    return elementos
+        .whereType<Map>()
+        .map((elemento) => Map<String, dynamic>.from(elemento))
+        .toList();
+  }
+
   Future<Map<String, dynamic>?> marcarLeida(String id) async {
     final respuesta = await _api.enviar(
       'PATCH',

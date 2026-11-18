@@ -15,6 +15,7 @@ import 'pantalla_editar_perfil.dart';
 import 'pantalla_elegir_ubicacion.dart';
 import 'pantalla_perfil_prestador.dart';
 import 'vista_prestador.dart';
+import '../../notificaciones/datos/repositorio_notificaciones.dart';
 import '../../notificaciones/presentacion/vista_notificaciones.dart';
 import '../../solicitudes/presentacion/pantalla_solicitud.dart';
 import '../../solicitudes/presentacion/vista_mis_servicios.dart';
@@ -53,6 +54,9 @@ class _EstadoPantallaInicio extends State<PantallaInicio> {
 
   /// Solo quien tiene la claim `admin: true` ve la opción "Administrador".
   bool _esAdmin = false;
+
+  /// Las alertas del administrador se revisan una vez al abrir la app.
+  bool _avisosRevisados = false;
 
   String _ciudad = 'Riobamba';
   String _sector = '';
@@ -100,8 +104,91 @@ class _EstadoPantallaInicio extends State<PantallaInicio> {
       if (mounted) {
         _cargarPreferencias();
         _verificarAdmin();
+        _mostrarAvisosPendientes();
       }
     });
+  }
+
+  /// Muestra en ventanas flotantes, una por una, las alertas que el
+  /// administrador envió y que el usuario aún no ha visto.
+  Future<void> _mostrarAvisosPendientes() async {
+    if (_avisosRevisados || Firebase.apps.isEmpty) return;
+    _avisosRevisados = true;
+
+    final repositorio = RepositorioNotificaciones();
+    List<Map<String, dynamic>> avisos;
+
+    try {
+      avisos = await repositorio.avisosPendientes();
+    } catch (_) {
+      // Sin conexión con el servidor: se mostrarán la próxima vez.
+      return;
+    }
+
+    for (var i = 0; i < avisos.length; i++) {
+      if (!mounted) return;
+
+      await _ventanaAviso(avisos[i], i + 1, avisos.length);
+
+      final id = avisos[i]['id']?.toString() ?? '';
+      if (id.isEmpty) continue;
+
+      try {
+        await repositorio.marcarLeida(id);
+      } catch (_) {
+        // Si no se pudo marcar, volverá a salir la próxima vez.
+      }
+    }
+  }
+
+  Future<void> _ventanaAviso(
+    Map<String, dynamic> aviso,
+    int numero,
+    int total,
+  ) {
+    final titulo = (aviso['titulo'] ?? 'Aviso del equipo de Helpi').toString();
+    final mensaje = (aviso['mensaje'] ?? '').toString();
+
+    return showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      builder: (dialogo) => AlertDialog(
+        icon: const Icon(
+          Icons.warning_amber_rounded,
+          color: ColoresApp.coral,
+          size: 44,
+        ),
+        title: Text(titulo, textAlign: TextAlign.center),
+        content: SizedBox(
+          width: 420,
+          child: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(mensaje, textAlign: TextAlign.center),
+                const SizedBox(height: 14),
+                Text(
+                  total > 1
+                      ? 'Equipo de Helpi · Alerta $numero de $total'
+                      : 'Equipo de Helpi',
+                  style: const TextStyle(
+                    fontSize: 12,
+                    color: ColoresApp.grisOscuro,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+        actionsAlignment: MainAxisAlignment.center,
+        actions: [
+          FilledButton(
+            onPressed: () => Navigator.pop(dialogo),
+            child: const Text('Entendido'),
+          ),
+        ],
+      ),
+    );
   }
 
   /// Consulta si el usuario tiene permiso de administrador para mostrar
