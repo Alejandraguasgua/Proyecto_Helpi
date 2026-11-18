@@ -7,19 +7,16 @@ import '../../inicio/presentacion/pantalla_inicio.dart';
 import '../../registro/datos/repositorio_perfil.dart';
 import '../../registro/presentacion/pantalla_roles.dart';
 import '../../terminos/presentacion/pantalla_terminos.dart';
-import '../datos/repositorio_admin.dart';
-import 'pantalla_admin.dart';
 
 /// Decide a qué pantalla va el usuario autenticado:
-/// bienvenida, administrador, registro pendiente, cuenta suspendida,
+/// bienvenida, registro pendiente, cuenta suspendida,
 /// aceptación obligatoria de términos o inicio.
+///
+/// Los administradores también entran primero a la interfaz de usuario;
+/// el panel de administración se abre desde "Mi perfil" → "Administrador".
 Future<Widget> destinoTrasSesion({User? usuario}) async {
   final usuarioActual = usuario ?? FirebaseAuth.instance.currentUser;
   if (usuarioActual == null) return const PantallaBienvenida();
-
-  if (await RepositorioAdmin().esAdministrador()) {
-    return const PantallaAdmin();
-  }
 
   final perfil = await RepositorioPerfil().leer();
 

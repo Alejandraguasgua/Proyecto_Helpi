@@ -24,6 +24,8 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_core/firebase_core.dart';
 
 import '../../bienvenida/presentacion/pantalla_bienvenida.dart';
+import '../../administrador/datos/repositorio_admin.dart';
+import '../../administrador/presentacion/pantalla_admin.dart';
 
 class PantallaInicio extends StatefulWidget {
   const PantallaInicio({super.key, required this.perfil});
@@ -48,6 +50,9 @@ class _EstadoPantallaInicio extends State<PantallaInicio> {
   bool _eliminandoCuenta = false;
   bool _cargandoPerfil = false;
   String? _errorPerfil;
+
+  /// Solo quien tiene la claim `admin: true` ve la opción "Administrador".
+  bool _esAdmin = false;
 
   String _ciudad = 'Riobamba';
   String _sector = '';
@@ -94,8 +99,27 @@ class _EstadoPantallaInicio extends State<PantallaInicio> {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted) {
         _cargarPreferencias();
+        _verificarAdmin();
       }
     });
+  }
+
+  /// Consulta si el usuario tiene permiso de administrador para mostrar
+  /// (u ocultar) la opción "Administrador" en Mi perfil.
+  Future<void> _verificarAdmin() async {
+    if (Firebase.apps.isEmpty) return;
+
+    final esAdmin = await RepositorioAdmin().esAdministrador();
+
+    if (mounted && esAdmin != _esAdmin) {
+      setState(() => _esAdmin = esAdmin);
+    }
+  }
+
+  void _abrirAdministrador() {
+    Navigator.of(context).push(
+      MaterialPageRoute<void>(builder: (_) => const PantallaAdmin()),
+    );
   }
 
   Future<void> _cargarPreferencias() async {
@@ -743,6 +767,7 @@ class _EstadoPantallaInicio extends State<PantallaInicio> {
     setState(() => _seccion = indice);
     if (indice == 3) {
       _cargarPerfil();
+      _verificarAdmin();
     }
   }
 
@@ -1048,6 +1073,28 @@ class _EstadoPantallaInicio extends State<PantallaInicio> {
                     );
                   },
                 ),
+
+                if (_esAdmin)
+                  ListTile(
+                    contentPadding: EdgeInsets.zero,
+                    leading: const Icon(
+                      Icons.admin_panel_settings_outlined,
+                      color: ColoresApp.verdeAzulado,
+                    ),
+                    title: const Text(
+                      'Administrador',
+                      style: TextStyle(
+                        fontSize: 14,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                    subtitle: const Text(
+                      'Panel de administración de Helpi',
+                      style: TextStyle(fontSize: 12),
+                    ),
+                    trailing: const Icon(Icons.chevron_right, size: 20),
+                    onTap: _abrirAdministrador,
+                  ),
 
                 const SizedBox(height: 8),
                 const Divider(),
