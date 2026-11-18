@@ -500,6 +500,11 @@ function crearAplicacion({ almacen, auth, db }) {
     ),
   );
 
+  // Número que se muestra en la campanita de notificaciones.
+  registrarRuta('get', '/notificaciones/sin-leer', (solicitud) =>
+    servicio.contarNotificacionesSinLeer(solicitud.usuario.uid),
+  );
+
   // Alertas del administrador sin leer (ventana flotante al abrir la app).
   registrarRuta('get', '/notificaciones/avisos-pendientes', (solicitud) =>
     servicio.avisosAdminPendientes(solicitud.usuario.uid),

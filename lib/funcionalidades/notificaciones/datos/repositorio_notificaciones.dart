@@ -38,6 +38,13 @@ class RepositorioNotificaciones {
     return PaginaNotificaciones(datos, respuesta['siguienteCursor'] as String?);
   }
 
+  /// Cantidad de notificaciones sin leer (número de la campanita).
+  Future<int> contarSinLeer() async {
+    final respuesta = await _api.enviar('GET', '/notificaciones/sin-leer');
+    final total = respuesta['total'];
+    return total is num ? total.toInt() : 0;
+  }
+
   /// Alertas del administrador que el usuario aún no ha visto.
   Future<List<Map<String, dynamic>>> avisosPendientes() async {
     final respuesta = await _api.enviar(

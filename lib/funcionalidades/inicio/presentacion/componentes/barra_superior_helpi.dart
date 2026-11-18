@@ -17,6 +17,7 @@ class BarraSuperiorHelpi extends StatelessWidget {
     required this.alCambiarUbicacion,
     this.foto,
     this.guardandoRol = false,
+    this.notificacionesSinLeer = 0,
   });
 
   final int seccion;
@@ -31,6 +32,9 @@ class BarraSuperiorHelpi extends StatelessWidget {
 
   final Uint8List? foto;
   final bool guardandoRol;
+
+  /// Número que aparece sobre la campanita (0 = no se muestra).
+  final int notificacionesSinLeer;
 
   @override
   Widget build(BuildContext context) {
@@ -102,11 +106,24 @@ class BarraSuperiorHelpi extends StatelessWidget {
                 ),
 
                 IconButton(
-                  tooltip: 'Notificaciones',
+                  tooltip: notificacionesSinLeer > 0
+                      ? 'Notificaciones ($notificacionesSinLeer sin leer)'
+                      : 'Notificaciones',
                   onPressed: () => alCambiarSeccion(2),
-                  icon: const Icon(
-                    Icons.notifications_none,
-                    color: ColoresApp.azulMarino,
+                  icon: Badge(
+                    isLabelVisible: notificacionesSinLeer > 0,
+                    backgroundColor: ColoresApp.coral,
+                    label: Text(
+                      notificacionesSinLeer > 9
+                          ? '9+'
+                          : '$notificacionesSinLeer',
+                    ),
+                    child: Icon(
+                      notificacionesSinLeer > 0
+                          ? Icons.notifications
+                          : Icons.notifications_none,
+                      color: ColoresApp.azulMarino,
+                    ),
                   ),
                 ),
 

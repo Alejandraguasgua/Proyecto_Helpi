@@ -6,7 +6,11 @@ import '../../solicitudes/presentacion/pantalla_detalle_servicio.dart';
 import '../datos/repositorio_notificaciones.dart';
 
 class VistaNotificaciones extends StatefulWidget {
-  const VistaNotificaciones({super.key});
+  const VistaNotificaciones({super.key, this.alCambiarSinLeer});
+
+  /// Se llama al cargar la lista o al marcar una notificación como leída,
+  /// para que la campanita actualice su número.
+  final VoidCallback? alCambiarSinLeer;
 
   @override
   State<VistaNotificaciones> createState() => _EstadoVistaNotificaciones();
@@ -77,6 +81,8 @@ class _EstadoVistaNotificaciones extends State<VistaNotificaciones> {
         _cargandoInicial = false;
         _cargandoMas = false;
       });
+
+      widget.alCambiarSinLeer?.call();
     } catch (error) {
       if (!mounted || idPeticion != _idPeticionActiva) return;
 
@@ -167,6 +173,7 @@ class _EstadoVistaNotificaciones extends State<VistaNotificaciones> {
               };
             }
           });
+          widget.alCambiarSinLeer?.call();
         } catch (_) {
           // Si falla, el aviso seguirá como no leído; no es crítico.
         }
@@ -209,6 +216,8 @@ class _EstadoVistaNotificaciones extends State<VistaNotificaciones> {
             };
           }
         });
+
+        widget.alCambiarSinLeer?.call();
       }
 
       if (!mounted) return;

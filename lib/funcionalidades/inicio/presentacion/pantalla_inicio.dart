@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:typed_data';
 
@@ -58,6 +59,10 @@ class _EstadoPantallaInicio extends State<PantallaInicio> {
   /// Las alertas del administrador se revisan una vez al abrir la app.
   bool _avisosRevisados = false;
 
+  /// Número de la campanita; se actualiza cada 30 segundos.
+  int _notificacionesSinLeer = 0;
+  Timer? _temporizadorNotificaciones;
+
   String _ciudad = 'Riobamba';
   String _sector = '';
   String _categoria = 'Todas';
@@ -105,8 +110,38 @@ class _EstadoPantallaInicio extends State<PantallaInicio> {
         _cargarPreferencias();
         _verificarAdmin();
         _mostrarAvisosPendientes();
+        _iniciarContadorNotificaciones();
       }
     });
+  }
+
+  @override
+  void dispose() {
+    _temporizadorNotificaciones?.cancel();
+    super.dispose();
+  }
+
+  void _iniciarContadorNotificaciones() {
+    if (Firebase.apps.isEmpty) return;
+
+    _actualizarNotificacionesSinLeer();
+    _temporizadorNotificaciones = Timer.periodic(
+      const Duration(seconds: 30),
+      (_) => _actualizarNotificacionesSinLeer(),
+    );
+  }
+
+  Future<void> _actualizarNotificacionesSinLeer() async {
+    if (Firebase.apps.isEmpty) return;
+
+    try {
+      final total = await RepositorioNotificaciones().contarSinLeer();
+      if (mounted && total != _notificacionesSinLeer) {
+        setState(() => _notificacionesSinLeer = total);
+      }
+    } catch (_) {
+      // Sin conexión: se deja el número anterior.
+    }
   }
 
   /// Muestra en ventanas flotantes, una por una, las alertas que el
@@ -139,6 +174,8 @@ class _EstadoPantallaInicio extends State<PantallaInicio> {
         // Si no se pudo marcar, volverá a salir la próxima vez.
       }
     }
+
+    _actualizarNotificacionesSinLeer();
   }
 
   Future<void> _ventanaAviso(
@@ -737,7 +774,9 @@ class _EstadoPantallaInicio extends State<PantallaInicio> {
   }
 
   Widget _notificaciones() {
-    return const VistaNotificaciones();
+    return VistaNotificaciones(
+      alCambiarSinLeer: _actualizarNotificacionesSinLeer,
+    );
   }
 
   Widget _datoPerfil(String etiqueta, String valor) {
@@ -852,6 +891,7 @@ class _EstadoPantallaInicio extends State<PantallaInicio> {
 
   void _seleccionarSeccion(int indice) {
     setState(() => _seccion = indice);
+    _actualizarNotificacionesSinLeer();
     if (indice == 3) {
       _cargarPerfil();
       _verificarAdmin();
@@ -1313,29 +1353,43 @@ class _EstadoPantallaInicio extends State<PantallaInicio> {
         indicatorColor: ColoresApp.verdeMenta,
         labelBehavior: NavigationDestinationLabelBehavior.alwaysShow,
         onDestinationSelected: _seleccionarSeccion,
-        destinations: const [
-          NavigationDestination(
+        destinations: [
+          const NavigationDestination(
             icon: Icon(Icons.home_outlined),
             selectedIcon: Icon(Icons.home, color: ColoresApp.verdeAzulado),
             label: 'Inicio',
           ),
 
-          NavigationDestination(
+          const NavigationDestination(
             icon: Icon(Icons.work_outline),
             selectedIcon: Icon(Icons.work, color: ColoresApp.verdeAzulado),
             label: 'Mis servicios',
           ),
 
           NavigationDestination(
-            icon: Icon(Icons.notifications_none),
-            selectedIcon: Icon(
-              Icons.notifications,
-              color: ColoresApp.verdeAzulado,
+            icon: Badge(
+              isLabelVisible: _notificacionesSinLeer > 0,
+              backgroundColor: ColoresApp.coral,
+              label: Text(
+                _notificacionesSinLeer > 9 ? '9+' : '$_notificacionesSinLeer',
+              ),
+              child: const Icon(Icons.notifications_none),
+            ),
+            selectedIcon: Badge(
+              isLabelVisible: _notificacionesSinLeer > 0,
+              backgroundColor: ColoresApp.coral,
+              label: Text(
+                _notificacionesSinLeer > 9 ? '9+' : '$_notificacionesSinLeer',
+              ),
+              child: const Icon(
+                Icons.notifications,
+                color: ColoresApp.verdeAzulado,
+              ),
             ),
             label: 'Notificaciones',
           ),
 
-          NavigationDestination(
+          const NavigationDestination(
             icon: Icon(Icons.person_outline),
             selectedIcon: Icon(Icons.person, color: ColoresApp.verdeAzulado),
             label: 'Mi perfil',
@@ -1354,6 +1408,7 @@ class _EstadoPantallaInicio extends State<PantallaInicio> {
               nombre: _nombre,
               foto: _foto,
               guardandoRol: _guardandoRol,
+              notificacionesSinLeer: _notificacionesSinLeer,
               alCambiarSeccion: _seleccionarSeccion,
               alCambiarRol: _cambiarRol,
               alCambiarUbicacion: _cambiarUbicacion,

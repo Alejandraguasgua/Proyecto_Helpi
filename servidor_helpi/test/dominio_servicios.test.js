@@ -2223,3 +2223,21 @@ test('Admin: alerta con título y lista de alertas pendientes del usuario', asyn
     (e) => e instanceof ErrorHelpi && e.estado === 400,
   );
 });
+
+
+test('Campanita: cuenta solo las notificaciones sin leer del usuario', async () => {
+  const { almacen, servicio } = escenarioAdmin();
+
+  assert.deepEqual(await servicio.contarNotificacionesSinLeer('usuario_1'), {
+    total: 0,
+  });
+
+  almacen.datos.set('notificaciones/a', { id: 'a', uid: 'usuario_1', leida: false });
+  almacen.datos.set('notificaciones/b', { id: 'b', uid: 'usuario_1', leida: false });
+  almacen.datos.set('notificaciones/c', { id: 'c', uid: 'usuario_1', leida: true });
+  almacen.datos.set('notificaciones/d', { id: 'd', uid: 'prestador_1', leida: false });
+
+  assert.deepEqual(await servicio.contarNotificacionesSinLeer('usuario_1'), {
+    total: 2,
+  });
+});

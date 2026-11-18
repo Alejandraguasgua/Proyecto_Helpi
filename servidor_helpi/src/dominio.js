@@ -1950,6 +1950,15 @@ class ServicioHelpi {
     return { correcto: true };
   }
 
+  /** Cantidad de notificaciones sin leer (para el número de la campanita). */
+  async contarNotificacionesSinLeer(uid) {
+    const notificaciones = await this.listarTodo('notificaciones', 'uid', uid);
+
+    return {
+      total: notificaciones.filter((n) => n.leida !== true).length,
+    };
+  }
+
   /**
    * Alertas del administrador que el usuario todavía no ha leído,
    * de la más antigua a la más reciente. La app las muestra en una
