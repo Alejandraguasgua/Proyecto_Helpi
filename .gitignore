@@ -67,3 +67,5 @@ credenciales/
 *.keystore
 key.properties
 lib.zip
+
+/android/build/
