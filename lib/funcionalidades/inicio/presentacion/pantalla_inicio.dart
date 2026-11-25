@@ -29,6 +29,8 @@ import '../../bienvenida/presentacion/pantalla_bienvenida.dart';
 import '../../administrador/datos/repositorio_admin.dart';
 import '../../administrador/presentacion/pantalla_admin.dart';
 
+import '../../../nucleo/servicios/servicio_notificaciones.dart';
+
 class PantallaInicio extends StatefulWidget {
   const PantallaInicio({super.key, required this.perfil});
 
@@ -76,15 +78,6 @@ class _EstadoPantallaInicio extends State<PantallaInicio> {
 
   String get _nombre {
     return (_perfil['nombre'] ?? '').toString().trim();
-  }
-
-  String get _claveAvatar {
-    final identificador = (_perfil['telefono'] ?? _perfil['nombre'] ?? 'demo')
-        .toString();
-
-    final clave = base64Url.encode(utf8.encode(identificador));
-
-    return 'helpi_avatar_demo_$clave';
   }
 
   @override
@@ -241,9 +234,8 @@ class _EstadoPantallaInicio extends State<PantallaInicio> {
   }
 
   void _abrirAdministrador() {
-    Navigator.of(context).push(
-      MaterialPageRoute<void>(builder: (_) => const PantallaAdmin()),
-    );
+    Navigator.of(context)
+        .push(MaterialPageRoute<void>(builder: (_) => const PantallaAdmin()));
   }
 
   Future<void> _cargarPreferencias() async {
@@ -252,15 +244,11 @@ class _EstadoPantallaInicio extends State<PantallaInicio> {
         'helpi_ubicacion_exploracion_demo',
       );
 
-      final fotoGuardada = await _preferencias.getString(_claveAvatar);
-
       String? ciudad;
       String sector = '';
 
       double? latitud;
       double? longitud;
-
-      Uint8List? foto;
 
       if (ubicacionGuardada != null) {
         final ubicacion = Map<String, dynamic>.from(
@@ -275,15 +263,6 @@ class _EstadoPantallaInicio extends State<PantallaInicio> {
         longitud = double.tryParse((ubicacion['longitud'] ?? '').toString());
       }
 
-      if (_foto == null && fotoGuardada != null) {
-        final bytes = base64Decode(fotoGuardada);
-
-        final imagen = await decodeImageFromList(bytes);
-        imagen.dispose();
-
-        foto = bytes;
-      }
-
       if (!mounted) return;
 
       setState(() {
@@ -294,10 +273,6 @@ class _EstadoPantallaInicio extends State<PantallaInicio> {
         _sector = sector;
         _latitud = latitud;
         _longitud = longitud;
-
-        if (_foto == null && foto != null) {
-          _foto = foto;
-        }
       });
     } catch (_) {
       if (!mounted) return;
@@ -508,7 +483,7 @@ class _EstadoPantallaInicio extends State<PantallaInicio> {
   }
 
   Future<void> _elegirFoto() async {
-    if (_guardandoFoto) return;
+    if (_guardandoFoto || _cargandoPerfil) return;
 
     setState(() => _guardandoFoto = true);
 
@@ -516,6 +491,7 @@ class _EstadoPantallaInicio extends State<PantallaInicio> {
       final archivo = await ImagePicker().pickImage(
         source: ImageSource.gallery,
         maxWidth: 512,
+        maxHeight: 512,
         imageQuality: 75,
         requestFullMetadata: false,
       );
@@ -535,13 +511,14 @@ class _EstadoPantallaInicio extends State<PantallaInicio> {
       final imagen = await decodeImageFromList(bytes);
       imagen.dispose();
 
-      await _preferencias.setString(_claveAvatar, base64Encode(bytes));
+      await RepositorioPerfil().guardarFoto(bytes);
 
       if (!mounted) return;
 
       setState(() {
         _foto = bytes;
         _perfil['foto'] = bytes;
+        _perfil['fotoBase64'] = base64Encode(bytes);
       });
     } catch (_) {
       if (mounted) {
@@ -555,18 +532,19 @@ class _EstadoPantallaInicio extends State<PantallaInicio> {
   }
 
   Future<void> _quitarFoto() async {
-    if (_guardandoFoto) return;
+    if (_guardandoFoto || _cargandoPerfil) return;
 
     setState(() => _guardandoFoto = true);
 
     try {
-      await _preferencias.remove(_claveAvatar);
+      await RepositorioPerfil().guardarFoto(null);
 
       if (!mounted) return;
 
       setState(() {
         _foto = null;
         _perfil.remove('foto');
+        _perfil.remove('fotoBase64');
       });
     } catch (_) {
       if (mounted) {
@@ -813,6 +791,7 @@ class _EstadoPantallaInicio extends State<PantallaInicio> {
     });
 
     try {
+      await ServicioNotificaciones.quitarToken(); // <-- nueva
       await FirebaseAuth.instance.signOut();
 
       if (!mounted) return;
@@ -836,7 +815,7 @@ class _EstadoPantallaInicio extends State<PantallaInicio> {
   }
 
   Future<void> _cargarPerfil({bool mostrarAvisoExito = false}) async {
-    if (_cargandoPerfil) return;
+    if (_cargandoPerfil || _guardandoFoto) return;
 
     setState(() {
       _cargandoPerfil = true;
@@ -853,11 +832,15 @@ class _EstadoPantallaInicio extends State<PantallaInicio> {
         final nuevoSector = (perfilRemoto['sector'] ?? '').toString().trim();
 
         setState(() {
-          _perfil = <String, dynamic>{
-            ..._perfil,
-            ...perfilRemoto,
-            if (_foto != null) 'foto': _foto,
-          };
+          _perfil = <String, dynamic>{..._perfil, ...perfilRemoto};
+          _perfil.remove('foto');
+          _perfil.remove('fotoBase64');
+          final fotoRemota = perfilRemoto['foto'];
+          _foto = fotoRemota is Uint8List ? fotoRemota : null;
+          if (_foto != null) _perfil['foto'] = _foto;
+          if (perfilRemoto.containsKey('fotoBase64')) {
+            _perfil['fotoBase64'] = perfilRemoto['fotoBase64'];
+          }
           if (nuevaCiudad.isNotEmpty) {
             _ciudad = nuevaCiudad;
           }

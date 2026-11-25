@@ -530,7 +530,7 @@ class ServicioHelpi {
     const ahoraIso = this.reloj().toISOString();
 
     if (claveIdempotencia) {
-      return this.almacen.atomic(async (transaccion) => {
+      const resultado = await this.almacen.atomic(async (transaccion) => {
         const rutaIdemp = `idempotencia_solicitudes/${uid}_crear_${claveIdempotencia}`;
         const previo = await transaccion.get(rutaIdemp);
 
@@ -565,6 +565,11 @@ class ServicioHelpi {
 
         return solicitud;
       });
+            if (resultado.creada === ahoraIso) {
+              this.notificarPrestadoresZona(resultado).catch(() => {});
+            }
+
+            return resultado;
     }
 
     const identificador = randomUUID();
@@ -584,6 +589,7 @@ class ServicioHelpi {
       solicitud,
     );
 
+    this.notificarPrestadoresZona(solicitud).catch(() => {});
     return solicitud;
   }
 
@@ -1136,44 +1142,62 @@ class ServicioHelpi {
         ),
       ];
 
-      // Lectura previa en la transacción para evitar duplicados ante reintentos
-      const avisosParaCrear = [];
-      for (const destinatario of destinatarios) {
-        const idAviso = `notif_${identificador}_${tipoAviso}_${destinatario}`;
-        const existente = await transaccion.get(
-          `notificaciones/${idAviso}`,
-        );
+           // Lectura previa en la transacción para evitar duplicados ante reintentos
+           const avisosParaCrear = [];
+           for (const destinatario of destinatarios) {
+             const idAviso = `notif_${identificador}_${tipoAviso}_${destinatario}`;
+             const existente = await transaccion.get(
+               `notificaciones/${idAviso}`,
+             );
 
-        if (!existente) {
-          avisosParaCrear.push({
-            id: idAviso,
-            uid: destinatario,
-            destinatarioUid: destinatario,
-            solicitudId: identificador,
-            servicioTitulo: tituloServicio,
-            tipo: tipoAviso,
-            titulo: tituloAviso,
-            mensaje: mensajeAviso,
-            leida: false,
-            fechaLectura: null,
-            creada: ahoraIso,
-          });
-        }
-      }
+             if (!existente) {
+               avisosParaCrear.push({
+                 id: idAviso,
+                 uid: destinatario,
+                 destinatarioUid: destinatario,
+                 solicitudId: identificador,
+                 servicioTitulo: tituloServicio,
+                 tipo: tipoAviso,
+                 titulo: tituloAviso,
+                 mensaje: mensajeAviso,
+                 leida: false,
+                 fechaLectura: null,
+                 creada: ahoraIso,
+               });
+             }
+           }
 
-      transaccion.set(
-        `solicitudes/${identificador}`,
-        actualizada,
-      );
+           if (accion === 'confirmar') {
+                          for (const destinatario of [solicitud.solicitanteUid]) {
+               avisosParaCrear.push({
+                 id: `notif_${identificador}_calificar_${destinatario}`,
+                 uid: destinatario,
+                 destinatarioUid: destinatario,
+                 solicitudId: identificador,
+                 servicioTitulo: tituloServicio,
+                 tipo: 'calificar_servicio',
+                 titulo: 'Califica tu experiencia',
+                 mensaje: `¿Cómo te fue con "${tituloServicio}"? Deja tu calificación.`,
+                 leida: false,
+                 fechaLectura: null,
+                 creada: ahoraIso,
+               });
+             }
+           }
 
-      for (const aviso of avisosParaCrear) {
-        transaccion.set(
-          `notificaciones/${aviso.id}`,
-          aviso,
-        );
-      }
+           transaccion.set(
+             `solicitudes/${identificador}`,
+             actualizada,
+           );
 
-      return actualizada;
+           for (const aviso of avisosParaCrear) {
+             transaccion.set(
+               `notificaciones/${aviso.id}`,
+               aviso,
+             );
+           }
+
+           return actualizada;
     });
   }
 
@@ -1528,6 +1552,18 @@ class ServicioHelpi {
         promedio,
       });
 
+      transaccion.set(`notificaciones/notif_${calificacion.id}_calificacion`, {
+        id: `notif_${calificacion.id}_calificacion`,
+        uid: destino,
+        destinatarioUid: destino,
+        solicitudId: identificador,
+        tipo: 'calificacion_recibida',
+        titulo: 'Recibiste una calificación',
+        mensaje: `${autorNombre} te calificó con ${datos.estrellas} estrellas.`,
+        leida: false,
+        fechaLectura: null,
+        creada: ahoraIso,
+      });
       return calificacion;
     });
   }
@@ -1785,6 +1821,48 @@ class ServicioHelpi {
     });
   }
 
+  /** Crea una notificación; el push sale solo (ver notificador_push.js). */
+  async notificar(uid, tipo, titulo, mensaje, extra = {}) {
+    const id = `notif_${randomUUID()}`;
+    await this.almacen.set(`notificaciones/${id}`, {
+      id,
+      uid,
+      destinatarioUid: uid,
+      tipo,
+      titulo,
+      mensaje,
+      leida: false,
+      fechaLectura: null,
+      creada: new Date().toISOString(),
+      ...extra,
+    });
+  }
+
+  /** Avisa a los prestadores de la misma ciudad y categoría. */
+  async notificarPrestadoresZona(solicitud) {
+    const usuarios = await this.listarTodo('usuarios', 'ciudad', solicitud.ciudad);
+    const destinatarios = usuarios
+      .filter(
+        (u) =>
+          u.id !== solicitud.solicitanteUid &&
+          u.rol === 'prestador' &&
+          u.suspendido !== true &&
+          !Array.isArray(u.categorias) ||
+  u.categorias.length === 0 ||
+  u.categorias.includes(solicitud.categoria),
+      )
+      .slice(0, 200);
+
+    for (const u of destinatarios) {
+      await this.notificar(
+        u.id,
+        'nueva_solicitud_zona',
+        'Nueva solicitud cerca de ti',
+        `${solicitud.titulo} · ${solicitud.categoria}`,
+        { solicitudId: solicitud.id },
+      );
+    }
+  }
   /** Crea un aviso del equipo de Helpi en las notificaciones del usuario. */
   crearAvisoAdmin(uid, titulo, mensaje) {
     const id = `aviso_admin_${randomUUID()}`;
@@ -1861,6 +1939,14 @@ class ServicioHelpi {
       { nombre: perfil.nombre ?? null, dias, motivo, hasta },
     );
 
+    await this.notificar(
+      uid,
+      'cuenta_suspendida',
+      'Cuenta suspendida',
+      motivo
+        ? `Tu cuenta fue suspendida. Motivo: ${motivo}`
+        : 'Tu cuenta fue suspendida.',
+    );
     return {
       correcto: true,
       suspendido: true,
@@ -1893,6 +1979,12 @@ class ServicioHelpi {
       nombre: perfil.nombre ?? null,
     });
 
+    await this.notificar(
+      uid,
+      'cuenta_reactivada',
+      'Cuenta reactivada',
+      'Ya puedes volver a usar Helpi.',
+    );
     return { correcto: true, suspendido: false };
   }
 
@@ -2031,6 +2123,16 @@ class ServicioHelpi {
       { destinoUid: reporte.destinoUid ?? null, motivo: reporte.motivo, nota },
     );
 
+    if (reporte.autorUid) {
+      await this.notificar(
+        reporte.autorUid,
+        'reporte_atendido',
+        estado === 'resuelto' ? 'Tu reporte fue resuelto' : 'Tu reporte fue revisado',
+        estado === 'resuelto'
+          ? 'Gracias por avisarnos, tomamos acción sobre tu reporte.'
+          : 'Revisamos tu reporte y no encontramos una infracción.',
+      );
+    }
     return { correcto: true, estado };
   }
 

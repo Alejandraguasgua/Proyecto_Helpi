@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/foundation.dart';
@@ -112,8 +114,12 @@ class RepositorioPerfil {
     final usuario = _usuarioActual();
     final datos = Map<String, dynamic>.from(perfil);
 
-    // La imagen se conectará a Storage por separado.
-    datos.remove('foto');
+    // Guarda la imagen como texto Base64, no como bytes en el perfil.
+    final foto = datos.remove('foto');
+    datos.remove('fotoBase64');
+    if (foto is Uint8List) {
+      datos['fotoBase64'] = _codificarFoto(foto);
+    }
 
     // Nunca sobrescribe ni invalida terminosAceptados o su historial al guardar otros campos o cambiar rol.
     if (!tieneAceptacionVigente(datos, uidAutenticado: usuario.uid)) {
@@ -131,6 +137,26 @@ class RepositorioPerfil {
         .collection('usuarios')
         .doc(usuario.uid)
         .set(datos, SetOptions(merge: true));
+  }
+
+  static String _codificarFoto(Uint8List foto) {
+    if (foto.isEmpty || foto.length > 512 * 1024) {
+      throw StateError('La foto debe tener un tamaño máximo de 512 KB.');
+    }
+    return base64Encode(foto);
+  }
+
+  Future<void> guardarFoto(Uint8List? foto) async {
+    final usuario = _usuarioActual();
+    await FirebaseFirestore.instance
+        .collection('usuarios')
+        .doc(usuario.uid)
+        .update({
+          'fotoBase64': foto == null
+              ? FieldValue.delete()
+              : _codificarFoto(foto),
+          'fechaActualizacion': FieldValue.serverTimestamp(),
+        });
   }
 
   Future<Map<String, dynamic>> actualizarCampos(
@@ -261,7 +287,16 @@ class RepositorioPerfil {
       return null;
     }
 
-    return Map<String, dynamic>.from(datos);
+    final perfil = Map<String, dynamic>.from(datos);
+    final foto = perfil['fotoBase64'];
+    if (foto is String && foto.isNotEmpty) {
+      try {
+        perfil['foto'] = base64Decode(foto);
+      } on FormatException {
+        perfil.remove('foto');
+      }
+    }
+    return perfil;
   }
 
   Future<void> borrar() async {

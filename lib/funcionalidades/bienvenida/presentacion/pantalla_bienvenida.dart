@@ -131,7 +131,7 @@ class _IlustracionAcceso extends StatelessWidget {
       child: AspectRatio(
         aspectRatio: 852 / 1060,
         child: Image.asset(
-          'assets/imagenes/Fondo_acceso.png',
+          'assets/imagenes/fondo_acceso.png',
           fit: BoxFit.cover,
           alignment: Alignment.topCenter,
           excludeFromSemantics: true,
@@ -229,6 +229,9 @@ class _EstadoPanelAcceso extends State<_PanelAcceso> {
       Navigator.of(context)
           .pushReplacement(MaterialPageRoute<void>(builder: (_) => destino));
     } on GoogleSignInException catch (error) {
+      debugPrint('Código Google: ${error.code}');
+      debugPrint('Descripción Google: ${error.description}');
+      debugPrint('Error completo: $error');
       if (!mounted) return;
 
       if (error.code == GoogleSignInExceptionCode.canceled) {

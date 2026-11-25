@@ -49,3 +49,21 @@ app.*.map.json
 
 # Configuración local de Mapbox
 .env.mapbox
+
+# Credenciales privadas
+.env
+.env.*
+!.env.example
+!.env.mapbox.example
+node_modules/
+*-adminsdk-*.json
+firebase-admin.json
+serviceAccount*.json
+credenciales*.json
+credenciales/
+*.pem
+*.key
+*.jks
+*.keystore
+key.properties
+lib.zip

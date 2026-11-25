@@ -16,6 +16,7 @@ const {
 
 const { AlmacenFirestore } = require('./almacen_firestore');
 const { crearAplicacion } = require('./aplicacion');
+const { iniciarEnvioPush, iniciarRecordatorios } = require('./notificador_push');
 
 initializeApp({
   credential: applicationDefault(),
@@ -23,6 +24,8 @@ initializeApp({
 });
 
 const baseDeDatos = getFirestore();
+iniciarEnvioPush(baseDeDatos);
+iniciarRecordatorios(baseDeDatos);
 
 const aplicacion = crearAplicacion({
   db: baseDeDatos,
@@ -34,8 +37,7 @@ const aplicacion = crearAplicacion({
 });
 
 const puerto = Number(process.env.PORT || 3000);
-const host = process.env.HOST || '127.0.0.1';
-
+const host = process.env.HOST || '0.0.0.0';
 const servidor = aplicacion.listen(puerto, host, () => {
   console.log(`Servidor Helpi disponible en http://${host}:${puerto}`);
 });
