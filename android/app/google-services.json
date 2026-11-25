@@ -22,6 +22,14 @@
           }
         },
         {
+          "client_id": "400034948021-7dhn69qnhn6uu4b1j82lsvr8feihd93i.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.proyecto.helpi",
+            "certificate_hash": "101c4a80692567981ed13803cc112fa9e3a81733"
+          }
+        },
+        {
           "client_id": "400034948021-jbj3o2b3u6p6cob7sotpneu9in0u98bs.apps.googleusercontent.com",
           "client_type": 1,
           "android_info": {
@@ -45,6 +53,13 @@
             {
               "client_id": "400034948021-3rc82p0fle2jd2r3i95e451rcit6t615.apps.googleusercontent.com",
               "client_type": 3
+            },
+            {
+              "client_id": "400034948021-6hdr4nu77ubc0g0osreofd6fmel8goaf.apps.googleusercontent.com",
+              "client_type": 2,
+              "ios_info": {
+                "bundle_id": "com.example.aplicacionHelpi"
+              }
             }
           ]
         }

@@ -225,6 +225,30 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "4.1.0"
+  firebase_messaging:
+    dependency: "direct main"
+    description:
+      name: firebase_messaging
+      sha256: b971abf6ca94426d4cfc7685d6f97a34d3e1c2fda8e21d0e923d61736a984774
+      url: "https://pub.dev"
+    source: hosted
+    version: "17.1.0"
+  firebase_messaging_platform_interface:
+    dependency: transitive
+    description:
+      name: firebase_messaging_platform_interface
+      sha256: d51e4d1d1b3f575b83d3eff908f567311792601caafb04e63aff2c6ba09b6079
+      url: "https://pub.dev"
+    source: hosted
+    version: "4.12.0"
+  firebase_messaging_web:
+    dependency: transitive
+    description:
+      name: firebase_messaging_web
+      sha256: d519ccbf71ca759c4817ee2894960f7bfeb6568d8adef9ec8dbc4bea848b9e74
+      url: "https://pub.dev"
+    source: hosted
+    version: "4.4.0"
   flutter:
     dependency: "direct main"
     description: flutter
@@ -516,34 +540,34 @@ packages:
     dependency: "direct main"
     description:
       name: mapbox_maps_flutter
-      sha256: fb62f8945c8660204f011cb07af9cbe4f87c862b21b59e0dc978475467c752d5
+      sha256: "17e69c271b2819ad11f51c102202da2242b643671f8fb3300319268076ee407b"
       url: "https://pub.dev"
     source: hosted
-    version: "3.35.0"
+    version: "3.35.2"
   mapbox_maps_flutter_mobile:
     dependency: transitive
     description:
       name: mapbox_maps_flutter_mobile
-      sha256: cfb7d3b7ff2cb796d85f5350ef055f690a452207739416b942b797dd2510c44c
+      sha256: "405578463cbcaedac37b131e9b1ddb1055334e186ef53374d7fdfbd9f494b989"
       url: "https://pub.dev"
     source: hosted
-    version: "3.35.0"
+    version: "3.35.2"
   mapbox_maps_flutter_platform_interface:
     dependency: transitive
     description:
       name: mapbox_maps_flutter_platform_interface
-      sha256: "23b64fe3829a31901d684503db10e489c553f6f02cb08097c578bc7c93403e6b"
+      sha256: "2033b5aaec06f5b3764e3dcfe96a3cd41bec1f1b4cacf055696d296206854149"
       url: "https://pub.dev"
     source: hosted
-    version: "3.35.0"
+    version: "3.35.2"
   mapbox_maps_flutter_web:
     dependency: transitive
     description:
       name: mapbox_maps_flutter_web
-      sha256: "536c835b9a08ffec12fba6769707c7c48e096c5d46b23f2f919b2b542904d9e8"
+      sha256: c65ecb93757f54c8d473b0e043bab24dabd6d2a586610c1eb1af0175501ab00f
       url: "https://pub.dev"
     source: hosted
-    version: "3.35.0"
+    version: "3.35.2"
   matcher:
     dependency: transitive
     description:

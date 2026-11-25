@@ -29,7 +29,7 @@ class ErrorApiHelpi implements Exception {
 class ClienteApi {
   static const base = String.fromEnvironment(
     'HELPI_API_BASE_URL',
-    defaultValue: 'http://localhost:3000/api',
+    defaultValue: 'https://servidor-helpi.onrender.com/api',
   );
 
   Future<Map<String, dynamic>> enviar(

@@ -81,8 +81,9 @@ class _EstadoPantallaPersonalizar extends State<PantallaPersonalizar> {
     try {
       final imagen = await ImagePicker().pickImage(
         source: ImageSource.gallery,
-        maxWidth: 800,
-        imageQuality: 80,
+        maxWidth: 512,
+        maxHeight: 512,
+        imageQuality: 75,
         requestFullMetadata: false,
       );
 
@@ -90,9 +91,9 @@ class _EstadoPantallaPersonalizar extends State<PantallaPersonalizar> {
 
       final contenido = await imagen.readAsBytes();
 
-      if (contenido.length > 5 * 1024 * 1024) {
+      if (contenido.length > 512 * 1024) {
         if (mounted) {
-          aviso(context, 'Selecciona una imagen menor de 5 MB.');
+          aviso(context, 'Selecciona una imagen menor de 512 KB.');
         }
         return;
       }
@@ -390,7 +391,9 @@ class _EstadoPantallaPersonalizar extends State<PantallaPersonalizar> {
                           const SizedBox(height: 14),
 
                           TextButton(
-                            onPressed: _cargandoFoto ? null : _seleccionarFoto,
+                            onPressed: (_cargandoFoto || _guardandoRegistro)
+                                ? null
+                                : _seleccionarFoto,
                             child: Text(
                               _cargandoFoto
                                   ? 'Abriendo imagen…'
